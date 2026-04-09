@@ -1,3 +1,6 @@
+/* hxediter- Interactive hex viewer */
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -73,7 +76,7 @@ void display_page(unsigned char *file_buf, long file_size, long page_offset)
     }
 }
 
-/* Shows current position & available commands */
+/* Shows current position and available commands */
 void print_status(long page_offset, long file_size)
 {
     long current_page = (page_offset / PAGE_SIZE) + 1;
@@ -81,12 +84,12 @@ void print_status(long page_offset, long file_size)
 
     printf("--------------------------------------------------------------\n"
            "  Offset: 0x%08lX (%ld)  |  Page %ld of %ld  |  Size: %ld bytes\n"
-           "  [N]ext  [P]rev  [G offset]  [S hex bytes]  [Q]uit\n"
+           "  [N]ext  [P]rev  [G offset]  [S hex bytes]  [E offset byte]  [Q]uit\n"
            "--------------------------------------------------------------\n",
            page_offset, page_offset, current_page, total_pages, file_size);
 }
 
-/* Searches for a byte pattern. Returns offset of match, or -1 IF not found */
+/* Searches for a byte pattern. Returns offset of match, or -1 if not found */
 long search_bytes(unsigned char *file_buf, long file_size,
                   long start, unsigned char *pattern, int pattern_len)
 {
@@ -111,7 +114,7 @@ int main(int argc, char *argv[])
     long page_offset = 0;
     char input_buf[INPUT_BUF_SIZE];
 
-    /* Check args & open file */
+    /* Check args and open file */
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
@@ -123,7 +126,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* File size */
+    /* Get file size */
     file_size = get_file_size(fp);
     if (file_size <= 0) {
         fprintf(stderr, "Error: file is empty or cannot determine size\n");
@@ -131,7 +134,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Allocate buffer & load entire file into memory */
+    /* Allocate buffer and load entire file into memory */
     file_buf = (unsigned char *)malloc(file_size);
     if (file_buf == NULL) {
         fprintf(stderr, "Error: not enough memory to load file (%ld bytes)\n", file_size);
@@ -146,9 +149,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    fclose(fp);
+    fclose(fp);  /* File is in memory now, done with the handle */
 
-    /* First page */
+    /* Show first page */
     printf("=== hxediter: %s (%ld bytes) ===\n", argv[1], file_size);
     display_page(file_buf, file_size, page_offset);
     print_status(page_offset, file_size);
@@ -215,7 +218,7 @@ int main(int argc, char *argv[])
             int chars_consumed;
             long result;
 
-            /* Parse space separated hex bytes from input */
+            /* Parse space-separated hex bytes from input */
             while (pattern_len < MAX_SEARCH_BYTES) {
                 if (sscanf(p, " %x%n", &byte_val, &chars_consumed) != 1)
                     break;
@@ -233,7 +236,7 @@ int main(int argc, char *argv[])
             result = search_bytes(file_buf, file_size,
                                   page_offset + 1, pattern, pattern_len);
 
-            /* Wrap around to beginning IF not found */
+            /* Wrap around to beginning if not found */
             if (result == -1 && page_offset > 0) {
                 printf("  (Wrapping around to start of file...)\n");
                 result = search_bytes(file_buf, file_size, 0, pattern, pattern_len);
@@ -250,13 +253,62 @@ int main(int argc, char *argv[])
             break;
         }
 
+        case 'e': {
+            long edit_offset = 0;
+            unsigned int byte_val = 0;
+            unsigned char old_val;
+            FILE *wfp;
+
+            if (sscanf(input_buf + 2, "%lx %x", &edit_offset, &byte_val) != 2) {
+                printf("Usage: e <hex_offset> <hex_byte>   (example: e 1A0 FF)\n");
+                break;
+            }
+
+            if (edit_offset < 0 || edit_offset >= file_size) {
+                printf("Offset 0x%lX is out of range (file is 0x%lX bytes)\n",
+                       edit_offset, file_size);
+                break;
+            }
+
+            if (byte_val > 0xFF) {
+                printf("Byte value 0x%X is too large (must be 00-FF)\n", byte_val);
+                break;
+            }
+
+            old_val = file_buf[edit_offset];
+            file_buf[edit_offset] = (unsigned char)byte_val;
+
+            wfp = fopen(argv[1], "wb");
+            if (wfp == NULL) {
+                printf("Error: cannot open '%s' for writing\n", argv[1]);
+                file_buf[edit_offset] = old_val;
+                break;
+            }
+
+            if (fwrite(file_buf, 1, file_size, wfp) != (size_t)file_size) {
+                printf("Error: failed to write file\n");
+                file_buf[edit_offset] = old_val;
+                fclose(wfp);
+                break;
+            }
+
+            fclose(wfp);
+
+            page_offset = (edit_offset / PAGE_SIZE) * PAGE_SIZE;
+            display_page(file_buf, file_size, page_offset);
+            print_status(page_offset, file_size);
+            printf("  Changed byte at 0x%08lX: 0x%02X -> 0x%02X\n",
+                   edit_offset, old_val, (unsigned char)byte_val);
+            break;
+        }
+
         case 'q':
             printf("Goodbye!\n");
             free(file_buf);
             return 0;
 
         default:
-            printf("Unknown command '%c'. Commands: [N]ext [P]rev [G offset] [S hex] [Q]uit\n",
+            printf("Unknown command '%c'. Commands: [N]ext [P]rev [G offset] [S hex] [E offset byte] [Q]uit\n",
                    input_buf[0]);
             break;
         }
