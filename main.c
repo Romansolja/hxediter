@@ -324,8 +324,12 @@ int main(int argc, char *argv[])
             }
 
             printf("Searching for %d byte(s)...\n", pattern_len);
+            /* Search from the start of the current page so matches at
+             * offset 0 (or the first byte of any page) are discoverable.
+             * Starting at +1 made those bytes impossible to find when the
+             * viewer was already on that page. */
             result = search_bytes(fp, file_size,
-                                  page_offset + 1, pattern, pattern_len);
+                                  page_offset, pattern, pattern_len);
 
             /* Wrap around to beginning if not found */
             if (result == -1 && page_offset > 0) {
