@@ -247,20 +247,20 @@ int main(int argc, char *argv[])
             break;
 
         case 'g': {
-            long new_offset = 0;
+            unsigned long new_offset = 0;
 
             if (sscanf(input_buf + 1, " %lx", &new_offset) != 1) {
                 printf("Usage: g <hex_offset>   (example: g 1A0)\n");
                 break;
             }
 
-            if (new_offset < 0 || new_offset >= file_size) {
+            if (new_offset >= (unsigned long)file_size) {
                 printf("Offset 0x%lX is out of range (file is 0x%lX bytes)\n",
                        new_offset, file_size);
                 break;
             }
 
-            page_offset = (new_offset / PAGE_SIZE) * PAGE_SIZE;
+            page_offset = (long)((new_offset / PAGE_SIZE) * PAGE_SIZE);
             display_page(fp, page_offset);
             print_status(page_offset, file_size);
             printf("  (Jumped to page containing offset 0x%08lX)\n", new_offset);
@@ -311,7 +311,7 @@ int main(int argc, char *argv[])
         }
 
         case 'e': {
-            long edit_offset = 0;
+            unsigned long edit_offset = 0;
             unsigned int byte_val = 0;
             int old_ch;
             unsigned char old_val;
@@ -326,7 +326,7 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            if (edit_offset < 0 || edit_offset >= file_size) {
+            if (edit_offset >= (unsigned long)file_size) {
                 printf("Offset 0x%lX is out of range (file is 0x%lX bytes)\n",
                        edit_offset, file_size);
                 break;
@@ -340,20 +340,20 @@ int main(int argc, char *argv[])
             /* Read the existing byte so we can save it for undo. The fseek
              * here also serves as the read->write fence required by C
              * before write_byte_at writes the new value. */
-            if (fseek(fp, edit_offset, SEEK_SET) != 0 ||
+            if (fseek(fp, (long)edit_offset, SEEK_SET) != 0 ||
                 (old_ch = fgetc(fp)) == EOF) {
                 printf("Error: cannot read byte at offset 0x%lX\n", edit_offset);
                 break;
             }
             old_val = (unsigned char)old_ch;
 
-            if (write_byte_at(fp, edit_offset, (unsigned char)byte_val) != 0) {
+            if (write_byte_at(fp, (long)edit_offset, (unsigned char)byte_val) != 0) {
                 printf("Error: failed to write byte at 0x%lX\n", edit_offset);
                 break;
             }
 
             if (undo_count < UNDO_MAX) {
-                undo_stack[undo_count].offset = edit_offset;
+                undo_stack[undo_count].offset = (long)edit_offset;
                 undo_stack[undo_count].old_val = old_val;
                 undo_stack[undo_count].new_val = (unsigned char)byte_val;
                 undo_count++;
@@ -361,7 +361,7 @@ int main(int argc, char *argv[])
                 printf("  Warning: undo history full, oldest edit cannot be undone\n");
             }
 
-            page_offset = (edit_offset / PAGE_SIZE) * PAGE_SIZE;
+            page_offset = (long)((edit_offset / PAGE_SIZE) * PAGE_SIZE);
             display_page(fp, page_offset);
             print_status(page_offset, file_size);
             printf("  Changed byte at 0x%08lX: 0x%02X -> 0x%02X\n",
