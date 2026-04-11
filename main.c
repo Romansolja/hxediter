@@ -9,6 +9,14 @@
 #define PAGE_SIZE (BYTES_PER_LINE * LINES_PER_PAGE)  /* 256 bytes per page */
 #define MAX_SEARCH_BYTES 16
 #define INPUT_BUF_SIZE 128
+#define UNDO_MAX 64
+#define SEARCH_CHUNK 4096
+
+typedef struct {
+    long offset;
+    unsigned char old_val;
+    unsigned char new_val;
+} UndoEntry;
 
 /* Returns file size in bytes, or -1 on error */
 long get_file_size(FILE *fp)
@@ -19,7 +27,9 @@ long get_file_size(FILE *fp)
         return -1;
 
     size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);  /* Rewind to start */
+
+    if (fseek(fp, 0, SEEK_SET) != 0)
+        return -1;
 
     return size;
 }
@@ -51,20 +61,28 @@ void print_hex_line(unsigned char *buf, int len, long offset)
     printf("|\n");
 }
 
-/* Displays one page (256 bytes) starting at page_offset */
-void display_page(unsigned char *file_buf, long file_size, long page_offset)
+/* Displays one page (up to 256 bytes) starting at page_offset.
+ * Reads directly from the file instead of holding it all in memory. */
+void display_page(FILE *fp, long page_offset)
 {
-    long bytes_remaining = file_size - page_offset;
+    unsigned char page_buf[PAGE_SIZE];
+    size_t got;
     long bytes_to_show;
     long i;
     int line_len;
 
-    if (bytes_remaining <= 0) {
+    if (fseek(fp, page_offset, SEEK_SET) != 0) {
+        printf("(Seek error)\n");
+        return;
+    }
+
+    got = fread(page_buf, 1, PAGE_SIZE, fp);
+    if (got == 0) {
         printf("(End of file)\n");
         return;
     }
 
-    bytes_to_show = (bytes_remaining < PAGE_SIZE) ? bytes_remaining : PAGE_SIZE;
+    bytes_to_show = (long)got;
 
     printf("\n");
     for (i = 0; i < bytes_to_show; i += BYTES_PER_LINE) {
@@ -72,7 +90,7 @@ void display_page(unsigned char *file_buf, long file_size, long page_offset)
         if (bytes_to_show - i < BYTES_PER_LINE)
             line_len = (int)(bytes_to_show - i);
 
-        print_hex_line(file_buf + page_offset + i, line_len, page_offset + i);
+        print_hex_line(page_buf + i, line_len, page_offset + i);
     }
 }
 
@@ -84,35 +102,79 @@ void print_status(long page_offset, long file_size)
 
     printf("--------------------------------------------------------------\n"
            "  Offset: 0x%08lX (%ld)  |  Page %ld of %ld  |  Size: %ld bytes\n"
-           "  [N]ext  [P]rev  [G offset]  [S hex bytes]  [E offset byte]  [Q]uit\n"
+           "  [N]ext  [P]rev  [G offset]  [S hex bytes]  [E offset byte]  [U]ndo  [Q]uit\n"
            "--------------------------------------------------------------\n",
            page_offset, page_offset, current_page, total_pages, file_size);
 }
 
-/* Searches for a byte pattern. Returns offset of match, or -1 if not found */
-long search_bytes(unsigned char *file_buf, long file_size,
+/* Searches for a byte pattern by streaming the file in overlapping chunks.
+ * Returns offset of match, or -1 if not found. */
+long search_bytes(FILE *fp, long file_size,
                   long start, unsigned char *pattern, int pattern_len)
 {
-    long i;
+    unsigned char chunk[SEARCH_CHUNK];
+    long pos;
 
-    if (pattern_len <= 0 || start + pattern_len > file_size)
+    if (pattern_len <= 0 || start < 0 || start + pattern_len > file_size)
         return -1;
 
-    for (i = start; i <= file_size - pattern_len; i++) {
-        if (memcmp(file_buf + i, pattern, pattern_len) == 0)
-            return i;
+    pos = start;
+    while (pos + pattern_len <= file_size) {
+        size_t got;
+        unsigned char *search_ptr;
+        int remaining;
+
+        if (fseek(fp, pos, SEEK_SET) != 0)
+            return -1;
+
+        got = fread(chunk, 1, SEARCH_CHUNK, fp);
+        if (got < (size_t)pattern_len)
+            break;  /* Not enough bytes left for any possible match */
+
+        /* Scan this chunk: memchr for the first byte, memcmp to confirm. */
+        search_ptr = chunk;
+        remaining = (int)got;
+        while (remaining >= pattern_len) {
+            unsigned char *match = memchr(search_ptr, pattern[0],
+                                          remaining - pattern_len + 1);
+            if (!match)
+                break;
+
+            if (memcmp(match, pattern, pattern_len) == 0)
+                return pos + (long)(match - chunk);
+
+            search_ptr = match + 1;
+            remaining = (int)got - (int)(search_ptr - chunk);
+        }
+
+        /* Advance, overlapping by (pattern_len - 1) so a pattern straddling
+         * the chunk boundary is still caught on the next iteration. */
+        pos += (long)got - (pattern_len - 1);
     }
 
     return -1;
 }
 
+/* Patches a single byte at 'offset' in the open file. Returns 0 on success,
+ * -1 on failure. fflush forces stdio to surface any deferred write error
+ * here, instead of letting it appear later as a confusing seek failure. */
+int write_byte_at(FILE *fp, long offset, unsigned char val)
+{
+    if (fseek(fp, offset, SEEK_SET) != 0) return -1;
+    if (fputc((int)val, fp) == EOF)      return -1;
+    if (fflush(fp) != 0)                 return -1;
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     FILE *fp;
-    unsigned char *file_buf;
     long file_size;
     long page_offset = 0;
     char input_buf[INPUT_BUF_SIZE];
+    UndoEntry undo_stack[UNDO_MAX];
+    int undo_count = 0;
+    int is_readonly = 0;
 
     /* Check args and open file */
     if (argc < 2) {
@@ -120,40 +182,35 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    fp = fopen(argv[1], "rb");
+    /* Try read+write first; fall back to read-only for files we cannot modify
+     * (system files, executables in use, files with read-only permissions). */
+    fp = fopen(argv[1], "rb+");
     if (fp == NULL) {
-        fprintf(stderr, "Error: cannot open '%s'\n", argv[1]);
-        return 1;
+        fp = fopen(argv[1], "rb");
+        if (fp == NULL) {
+            fprintf(stderr, "Error: cannot open '%s'\n", argv[1]);
+            return 1;
+        }
+        is_readonly = 1;
     }
 
     /* Get file size */
     file_size = get_file_size(fp);
-    if (file_size <= 0) {
-        fprintf(stderr, "Error: file is empty or cannot determine size\n");
+    if (file_size < 0) {
+        fprintf(stderr, "Error: cannot determine file size\n");
         fclose(fp);
         return 1;
     }
-
-    /* Allocate buffer and load entire file into memory */
-    file_buf = (unsigned char *)malloc(file_size);
-    if (file_buf == NULL) {
-        fprintf(stderr, "Error: not enough memory to load file (%ld bytes)\n", file_size);
+    if (file_size == 0) {
+        printf("File is empty.\n");
         fclose(fp);
-        return 1;
+        return 0;
     }
-
-    if (fread(file_buf, 1, file_size, fp) != (size_t)file_size) {
-        fprintf(stderr, "Error: could not read entire file\n");
-        free(file_buf);
-        fclose(fp);
-        return 1;
-    }
-
-    fclose(fp);  /* File is in memory now, done with the handle */
 
     /* Show first page */
-    printf("=== hxediter: %s (%ld bytes) ===\n", argv[1], file_size);
-    display_page(file_buf, file_size, page_offset);
+    printf("=== hxediter: %s (%ld bytes)%s ===\n",
+           argv[1], file_size, is_readonly ? " [READ-ONLY]" : "");
+    display_page(fp, page_offset);
     print_status(page_offset, file_size);
 
     /* Command loop */
@@ -163,13 +220,13 @@ int main(int argc, char *argv[])
         if (fgets(input_buf, sizeof(input_buf), stdin) == NULL)
             break;
 
-        switch (tolower(input_buf[0])) {
+        switch (tolower((unsigned char)input_buf[0])) {
 
         case 'n':
         case '\n':
             if (page_offset + PAGE_SIZE < file_size) {
                 page_offset += PAGE_SIZE;
-                display_page(file_buf, file_size, page_offset);
+                display_page(fp, page_offset);
                 print_status(page_offset, file_size);
             } else {
                 printf("Already at the end of the file.\n");
@@ -185,14 +242,14 @@ int main(int argc, char *argv[])
                 printf("Already at the start of the file.\n");
                 break;
             }
-            display_page(file_buf, file_size, page_offset);
+            display_page(fp, page_offset);
             print_status(page_offset, file_size);
             break;
 
         case 'g': {
             long new_offset = 0;
 
-            if (sscanf(input_buf + 2, "%lx", &new_offset) != 1) {
+            if (sscanf(input_buf + 1, " %lx", &new_offset) != 1) {
                 printf("Usage: g <hex_offset>   (example: g 1A0)\n");
                 break;
             }
@@ -204,7 +261,7 @@ int main(int argc, char *argv[])
             }
 
             page_offset = (new_offset / PAGE_SIZE) * PAGE_SIZE;
-            display_page(file_buf, file_size, page_offset);
+            display_page(fp, page_offset);
             print_status(page_offset, file_size);
             printf("  (Jumped to page containing offset 0x%08lX)\n", new_offset);
             break;
@@ -233,18 +290,18 @@ int main(int argc, char *argv[])
             }
 
             printf("Searching for %d byte(s)...\n", pattern_len);
-            result = search_bytes(file_buf, file_size,
+            result = search_bytes(fp, file_size,
                                   page_offset + 1, pattern, pattern_len);
 
             /* Wrap around to beginning if not found */
             if (result == -1 && page_offset > 0) {
                 printf("  (Wrapping around to start of file...)\n");
-                result = search_bytes(file_buf, file_size, 0, pattern, pattern_len);
+                result = search_bytes(fp, file_size, 0, pattern, pattern_len);
             }
 
             if (result != -1) {
                 page_offset = (result / PAGE_SIZE) * PAGE_SIZE;
-                display_page(file_buf, file_size, page_offset);
+                display_page(fp, page_offset);
                 print_status(page_offset, file_size);
                 printf("  Found at offset 0x%08lX (%ld)\n", result, result);
             } else {
@@ -256,10 +313,15 @@ int main(int argc, char *argv[])
         case 'e': {
             long edit_offset = 0;
             unsigned int byte_val = 0;
+            int old_ch;
             unsigned char old_val;
-            FILE *wfp;
 
-            if (sscanf(input_buf + 2, "%lx %x", &edit_offset, &byte_val) != 2) {
+            if (is_readonly) {
+                printf("Error: File opened in read-only mode.\n");
+                break;
+            }
+
+            if (sscanf(input_buf + 1, " %lx %x", &edit_offset, &byte_val) != 2) {
                 printf("Usage: e <hex_offset> <hex_byte>   (example: e 1A0 FF)\n");
                 break;
             }
@@ -275,45 +337,75 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            old_val = file_buf[edit_offset];
-            file_buf[edit_offset] = (unsigned char)byte_val;
+            /* Read the existing byte so we can save it for undo. The fseek
+             * here also serves as the read->write fence required by C
+             * before write_byte_at writes the new value. */
+            if (fseek(fp, edit_offset, SEEK_SET) != 0 ||
+                (old_ch = fgetc(fp)) == EOF) {
+                printf("Error: cannot read byte at offset 0x%lX\n", edit_offset);
+                break;
+            }
+            old_val = (unsigned char)old_ch;
 
-            wfp = fopen(argv[1], "wb");
-            if (wfp == NULL) {
-                printf("Error: cannot open '%s' for writing\n", argv[1]);
-                file_buf[edit_offset] = old_val;
+            if (write_byte_at(fp, edit_offset, (unsigned char)byte_val) != 0) {
+                printf("Error: failed to write byte at 0x%lX\n", edit_offset);
                 break;
             }
 
-            if (fwrite(file_buf, 1, file_size, wfp) != (size_t)file_size) {
-                printf("Error: failed to write file\n");
-                file_buf[edit_offset] = old_val;
-                fclose(wfp);
-                break;
+            if (undo_count < UNDO_MAX) {
+                undo_stack[undo_count].offset = edit_offset;
+                undo_stack[undo_count].old_val = old_val;
+                undo_stack[undo_count].new_val = (unsigned char)byte_val;
+                undo_count++;
+            } else {
+                printf("  Warning: undo history full, oldest edit cannot be undone\n");
             }
-
-            fclose(wfp);
 
             page_offset = (edit_offset / PAGE_SIZE) * PAGE_SIZE;
-            display_page(file_buf, file_size, page_offset);
+            display_page(fp, page_offset);
             print_status(page_offset, file_size);
             printf("  Changed byte at 0x%08lX: 0x%02X -> 0x%02X\n",
                    edit_offset, old_val, (unsigned char)byte_val);
             break;
         }
 
+        case 'u': {
+            UndoEntry *entry;
+
+            if (undo_count == 0) {
+                printf("Nothing to undo.\n");
+                break;
+            }
+
+            entry = &undo_stack[undo_count - 1];
+
+            if (write_byte_at(fp, entry->offset, entry->old_val) != 0) {
+                printf("Error: failed to write byte at 0x%lX\n", entry->offset);
+                break;
+            }
+
+            undo_count--;
+
+            page_offset = (entry->offset / PAGE_SIZE) * PAGE_SIZE;
+            display_page(fp, page_offset);
+            print_status(page_offset, file_size);
+            printf("  Undid byte at 0x%08lX: 0x%02X -> 0x%02X (%d undo(s) left)\n",
+                   entry->offset, entry->new_val, entry->old_val, undo_count);
+            break;
+        }
+
         case 'q':
             printf("Goodbye!\n");
-            free(file_buf);
+            fclose(fp);
             return 0;
 
         default:
-            printf("Unknown command '%c'. Commands: [N]ext [P]rev [G offset] [S hex] [E offset byte] [Q]uit\n",
+            printf("Unknown command '%c'. Commands: [N]ext [P]rev [G offset] [S hex] [E offset byte] [U]ndo [Q]uit\n",
                    input_buf[0]);
             break;
         }
     }
 
-    free(file_buf);
+    fclose(fp);
     return 0;
 }
