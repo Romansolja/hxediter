@@ -1,8 +1,26 @@
 /* hxediter- Interactive hex viewer */
+
+/* Ensure 64-bit file offsets on POSIX systems.
+ * MUST be defined before any system header is included. */
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
+#include <inttypes.h>
+
+#if defined(_WIN32)
+    #define fseek64(fp, off, whence) _fseeki64((fp), (__int64)(off), (whence))
+    #define ftell64(fp)              ((int64_t)_ftelli64(fp))
+#else
+    #include <sys/types.h>
+    #define fseek64(fp, off, whence) fseeko((fp), (off_t)(off), (whence))
+    #define ftell64(fp)              ((int64_t)ftello(fp))
+#endif
 
 #define BYTES_PER_LINE 16
 #define LINES_PER_PAGE 16
@@ -13,33 +31,33 @@
 #define SEARCH_CHUNK 4096
 
 typedef struct {
-    long offset;
+    int64_t offset;
     unsigned char old_val;
     unsigned char new_val;
 } UndoEntry;
 
 /* Returns file size in bytes, or -1 on error */
-long get_file_size(FILE *fp)
+int64_t get_file_size(FILE *fp)
 {
-    long size;
+    int64_t size;
 
-    if (fseek(fp, 0, SEEK_END) != 0)
+    if (fseek64(fp, 0, SEEK_END) != 0)
         return -1;
 
-    size = ftell(fp);
+    size = ftell64(fp);
 
-    if (fseek(fp, 0, SEEK_SET) != 0)
+    if (fseek64(fp, 0, SEEK_SET) != 0)
         return -1;
 
     return size;
 }
 
 /* Prints one row: offset + 16 hex bytes + ASCII */
-void print_hex_line(unsigned char *buf, int len, long offset)
+void print_hex_line(const unsigned char *buf, int len, int64_t offset)
 {
     int i;
 
-    printf("%08lX  ", offset);
+    printf("%08" PRIX64 "  ", offset);
 
     for (i = 0; i < BYTES_PER_LINE; i++) {
         if (i < len)
@@ -63,15 +81,15 @@ void print_hex_line(unsigned char *buf, int len, long offset)
 
 /* Displays one page (up to 256 bytes) starting at page_offset.
  * Reads directly from the file instead of holding it all in memory. */
-void display_page(FILE *fp, long page_offset)
+void display_page(FILE *fp, int64_t page_offset)
 {
     unsigned char page_buf[PAGE_SIZE];
     size_t got;
-    long bytes_to_show;
-    long i;
+    int64_t bytes_to_show;
+    int64_t i;
     int line_len;
 
-    if (fseek(fp, page_offset, SEEK_SET) != 0) {
+    if (fseek64(fp, page_offset, SEEK_SET) != 0) {
         printf("(Seek error)\n");
         return;
     }
@@ -82,7 +100,7 @@ void display_page(FILE *fp, long page_offset)
         return;
     }
 
-    bytes_to_show = (long)got;
+    bytes_to_show = (int64_t)got;
 
     printf("\n");
     for (i = 0; i < bytes_to_show; i += BYTES_PER_LINE) {
@@ -95,13 +113,13 @@ void display_page(FILE *fp, long page_offset)
 }
 
 /* Shows current position and available commands */
-void print_status(long page_offset, long file_size)
+void print_status(int64_t page_offset, int64_t file_size)
 {
-    long current_page = (page_offset / PAGE_SIZE) + 1;
-    long total_pages  = (file_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    int64_t current_page = (page_offset / PAGE_SIZE) + 1;
+    int64_t total_pages  = (file_size + PAGE_SIZE - 1) / PAGE_SIZE;
 
     printf("--------------------------------------------------------------\n"
-           "  Offset: 0x%08lX (%ld)  |  Page %ld of %ld  |  Size: %ld bytes\n"
+           "  Offset: 0x%08" PRIX64 " (%" PRId64 ")  |  Page %" PRId64 " of %" PRId64 "  |  Size: %" PRId64 " bytes\n"
            "  [N]ext  [P]rev  [G offset]  [S hex bytes]  [E offset byte]  [U]ndo  [Q]uit\n"
            "--------------------------------------------------------------\n",
            page_offset, page_offset, current_page, total_pages, file_size);
@@ -109,11 +127,11 @@ void print_status(long page_offset, long file_size)
 
 /* Searches for a byte pattern by streaming the file in overlapping chunks.
  * Returns offset of match, or -1 if not found. */
-long search_bytes(FILE *fp, long file_size,
-                  long start, unsigned char *pattern, int pattern_len)
+int64_t search_bytes(FILE *fp, int64_t file_size,
+                     int64_t start, const unsigned char *pattern, int pattern_len)
 {
     unsigned char chunk[SEARCH_CHUNK];
-    long pos;
+    int64_t pos;
 
     if (pattern_len <= 0 || start < 0 || start + pattern_len > file_size)
         return -1;
@@ -124,7 +142,7 @@ long search_bytes(FILE *fp, long file_size,
         unsigned char *search_ptr;
         int remaining;
 
-        if (fseek(fp, pos, SEEK_SET) != 0)
+        if (fseek64(fp, pos, SEEK_SET) != 0)
             return -1;
 
         got = fread(chunk, 1, SEARCH_CHUNK, fp);
@@ -141,7 +159,7 @@ long search_bytes(FILE *fp, long file_size,
                 break;
 
             if (memcmp(match, pattern, pattern_len) == 0)
-                return pos + (long)(match - chunk);
+                return pos + (int64_t)(match - chunk);
 
             search_ptr = match + 1;
             remaining = (int)got - (int)(search_ptr - chunk);
@@ -149,7 +167,7 @@ long search_bytes(FILE *fp, long file_size,
 
         /* Advance, overlapping by (pattern_len - 1) so a pattern straddling
          * the chunk boundary is still caught on the next iteration. */
-        pos += (long)got - (pattern_len - 1);
+        pos += (int64_t)got - (pattern_len - 1);
     }
 
     return -1;
@@ -158,22 +176,23 @@ long search_bytes(FILE *fp, long file_size,
 /* Patches a single byte at 'offset' in the open file. Returns 0 on success,
  * -1 on failure. fflush forces stdio to surface any deferred write error
  * here, instead of letting it appear later as a confusing seek failure. */
-int write_byte_at(FILE *fp, long offset, unsigned char val)
+int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 {
-    if (fseek(fp, offset, SEEK_SET) != 0) return -1;
-    if (fputc((int)val, fp) == EOF)      return -1;
-    if (fflush(fp) != 0)                 return -1;
+    if (fseek64(fp, offset, SEEK_SET) != 0) return -1;
+    if (fputc((int)val, fp) == EOF)         return -1;
+    if (fflush(fp) != 0)                    return -1;
     return 0;
 }
 
 int main(int argc, char *argv[])
 {
     FILE *fp;
-    long file_size;
-    long page_offset = 0;
+    int64_t file_size;
+    int64_t page_offset = 0;
     char input_buf[INPUT_BUF_SIZE];
     UndoEntry undo_stack[UNDO_MAX];
     int undo_count = 0;
+    int undo_head = 0;   /* ring buffer: index where the next edit will be written */
     int is_readonly = 0;
 
     /* Check args and open file */
@@ -208,7 +227,7 @@ int main(int argc, char *argv[])
     }
 
     /* Show first page */
-    printf("=== hxediter: %s (%ld bytes)%s ===\n",
+    printf("=== hxediter: %s (%" PRId64 " bytes)%s ===\n",
            argv[1], file_size, is_readonly ? " [READ-ONLY]" : "");
     display_page(fp, page_offset);
     print_status(page_offset, file_size);
@@ -247,23 +266,23 @@ int main(int argc, char *argv[])
             break;
 
         case 'g': {
-            unsigned long new_offset = 0;
+            uint64_t new_offset = 0;
 
-            if (sscanf(input_buf + 1, " %lx", &new_offset) != 1) {
+            if (sscanf(input_buf + 1, " %" SCNx64, &new_offset) != 1) {
                 printf("Usage: g <hex_offset>   (example: g 1A0)\n");
                 break;
             }
 
-            if (new_offset >= (unsigned long)file_size) {
-                printf("Offset 0x%lX is out of range (file is 0x%lX bytes)\n",
+            if (new_offset >= (uint64_t)file_size) {
+                printf("Offset 0x%" PRIX64 " is out of range (file is 0x%" PRIX64 " bytes)\n",
                        new_offset, file_size);
                 break;
             }
 
-            page_offset = (long)((new_offset / PAGE_SIZE) * PAGE_SIZE);
+            page_offset = (int64_t)((new_offset / PAGE_SIZE) * PAGE_SIZE);
             display_page(fp, page_offset);
             print_status(page_offset, file_size);
-            printf("  (Jumped to page containing offset 0x%08lX)\n", new_offset);
+            printf("  (Jumped to page containing offset 0x%08" PRIX64 ")\n", new_offset);
             break;
         }
 
@@ -271,17 +290,32 @@ int main(int argc, char *argv[])
             unsigned char pattern[MAX_SEARCH_BYTES];
             int pattern_len = 0;
             char *p = input_buf + 1;
-            unsigned int byte_val;
-            int chars_consumed;
-            long result;
+            int64_t result;
 
-            /* Parse space-separated hex bytes from input */
+            /* Parse space-separated hex bytes from input using strtol.
+             * strtol sets end_ptr to the first unparsed character, so we
+             * can safely advance p without needing %n. */
             while (pattern_len < MAX_SEARCH_BYTES) {
-                if (sscanf(p, " %x%n", &byte_val, &chars_consumed) != 1)
+                char *end_ptr;
+                long byte_val;
+
+                /* Skip leading whitespace so end_ptr == p means "no digits" */
+                while (*p == ' ' || *p == '\t')
+                    p++;
+                if (*p == '\0')
                     break;
-                pattern[pattern_len] = (unsigned char)byte_val;
-                pattern_len++;
-                p += chars_consumed;
+
+                byte_val = strtol(p, &end_ptr, 16);
+                if (end_ptr == p)              /* no hex digits consumed */
+                    break;
+                if (byte_val < 0 || byte_val > 0xFF) {
+                    printf("Byte value out of range (00-FF): %lX\n", byte_val);
+                    pattern_len = 0;           /* abort this search */
+                    break;
+                }
+
+                pattern[pattern_len++] = (unsigned char)byte_val;
+                p = end_ptr;
             }
 
             if (pattern_len == 0) {
@@ -303,7 +337,7 @@ int main(int argc, char *argv[])
                 page_offset = (result / PAGE_SIZE) * PAGE_SIZE;
                 display_page(fp, page_offset);
                 print_status(page_offset, file_size);
-                printf("  Found at offset 0x%08lX (%ld)\n", result, result);
+                printf("  Found at offset 0x%08" PRIX64 " (%" PRId64 ")\n", result, result);
             } else {
                 printf("  Pattern not found.\n");
             }
@@ -311,7 +345,7 @@ int main(int argc, char *argv[])
         }
 
         case 'e': {
-            unsigned long edit_offset = 0;
+            uint64_t edit_offset = 0;
             unsigned int byte_val = 0;
             int old_ch;
             unsigned char old_val;
@@ -321,13 +355,13 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            if (sscanf(input_buf + 1, " %lx %x", &edit_offset, &byte_val) != 2) {
+            if (sscanf(input_buf + 1, " %" SCNx64 " %x", &edit_offset, &byte_val) != 2) {
                 printf("Usage: e <hex_offset> <hex_byte>   (example: e 1A0 FF)\n");
                 break;
             }
 
-            if (edit_offset >= (unsigned long)file_size) {
-                printf("Offset 0x%lX is out of range (file is 0x%lX bytes)\n",
+            if (edit_offset >= (uint64_t)file_size) {
+                printf("Offset 0x%" PRIX64 " is out of range (file is 0x%" PRIX64 " bytes)\n",
                        edit_offset, file_size);
                 break;
             }
@@ -340,31 +374,33 @@ int main(int argc, char *argv[])
             /* Read the existing byte so we can save it for undo. The fseek
              * here also serves as the read->write fence required by C
              * before write_byte_at writes the new value. */
-            if (fseek(fp, (long)edit_offset, SEEK_SET) != 0 ||
+            if (fseek64(fp, (int64_t)edit_offset, SEEK_SET) != 0 ||
                 (old_ch = fgetc(fp)) == EOF) {
-                printf("Error: cannot read byte at offset 0x%lX\n", edit_offset);
+                printf("Error: cannot read byte at offset 0x%" PRIX64 "\n", edit_offset);
                 break;
             }
             old_val = (unsigned char)old_ch;
 
-            if (write_byte_at(fp, (long)edit_offset, (unsigned char)byte_val) != 0) {
-                printf("Error: failed to write byte at 0x%lX\n", edit_offset);
+            if (write_byte_at(fp, (int64_t)edit_offset, (unsigned char)byte_val) != 0) {
+                printf("Error: failed to write byte at 0x%" PRIX64 "\n", edit_offset);
                 break;
             }
 
-            if (undo_count < UNDO_MAX) {
-                undo_stack[undo_count].offset = (long)edit_offset;
-                undo_stack[undo_count].old_val = old_val;
-                undo_stack[undo_count].new_val = (unsigned char)byte_val;
+            /* Ring buffer push: write at undo_head, advance with wraparound.
+             * If the buffer is already full, this silently overwrites the
+             * oldest entry — exactly what we want, so the user always keeps
+             * the most recent UNDO_MAX edits undoable. */
+            undo_stack[undo_head].offset = (int64_t)edit_offset;
+            undo_stack[undo_head].old_val = old_val;
+            undo_stack[undo_head].new_val = (unsigned char)byte_val;
+            undo_head = (undo_head + 1) % UNDO_MAX;
+            if (undo_count < UNDO_MAX)
                 undo_count++;
-            } else {
-                printf("  Warning: undo history full, oldest edit cannot be undone\n");
-            }
 
-            page_offset = (long)((edit_offset / PAGE_SIZE) * PAGE_SIZE);
+            page_offset = (int64_t)((edit_offset / PAGE_SIZE) * PAGE_SIZE);
             display_page(fp, page_offset);
             print_status(page_offset, file_size);
-            printf("  Changed byte at 0x%08lX: 0x%02X -> 0x%02X\n",
+            printf("  Changed byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X\n",
                    edit_offset, old_val, (unsigned char)byte_val);
             break;
         }
@@ -377,10 +413,17 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            entry = &undo_stack[undo_count - 1];
+            /* Ring buffer pop: step undo_head back one slot (with wrap), and
+             * read the entry there. We add UNDO_MAX before the modulo so the
+             * intermediate value is never negative — C's % on negatives is
+             * implementation-defined and best avoided. */
+            undo_head = (undo_head - 1 + UNDO_MAX) % UNDO_MAX;
+            entry = &undo_stack[undo_head];
 
             if (write_byte_at(fp, entry->offset, entry->old_val) != 0) {
-                printf("Error: failed to write byte at 0x%lX\n", entry->offset);
+                printf("Error: failed to write byte at 0x%" PRIX64 "\n", entry->offset);
+                /* Roll head forward again so the failed undo stays on the stack */
+                undo_head = (undo_head + 1) % UNDO_MAX;
                 break;
             }
 
@@ -389,7 +432,7 @@ int main(int argc, char *argv[])
             page_offset = (entry->offset / PAGE_SIZE) * PAGE_SIZE;
             display_page(fp, page_offset);
             print_status(page_offset, file_size);
-            printf("  Undid byte at 0x%08lX: 0x%02X -> 0x%02X (%d undo(s) left)\n",
+            printf("  Undid byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X (%d undo(s) left)\n",
                    entry->offset, entry->new_val, entry->old_val, undo_count);
             break;
         }
