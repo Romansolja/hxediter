@@ -1,13 +1,13 @@
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2
+CFLAGS  = -Wall -Wextra -O2 -Iinclude
 TARGET  = hxediter
-SRCS    = main.c display.c fileops.c undo.c
+SRCS    = src/main.c src/display.c src/fileops.c src/undo.c
 OBJS    = $(SRCS:.c=.o)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-%.o: %.c platform.h editor.h
+src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
