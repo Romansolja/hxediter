@@ -1,10 +1,8 @@
 # hxediter
-Version 2
+Version 3
 
-Added paging, goto, and search.
+Added paging, goto, and search, editing, undo
 
 What's next:
-editing
-undo
 ascii search
-visual cursor
+desktop gui
