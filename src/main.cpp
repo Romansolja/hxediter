@@ -7,7 +7,7 @@
 
 int main(int argc, char *argv[])
 {
-    EditorState state = {0};
+    EditorState state = {};
 
     /* Check args and open file */
     if (argc < 2) {

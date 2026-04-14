@@ -1,13 +1,14 @@
 cmake_minimum_required(VERSION 3.10)
-project(hxediter C)
+project(hxediter CXX)
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(hxediter
-    src/main.c
-    src/display.c
-    src/fileops.c
-    src/undo.c
+    src/main.cpp
+    src/display.cpp
+    src/fileops.cpp
+    src/undo.cpp
 )
 
 target_include_directories(hxediter PRIVATE include)

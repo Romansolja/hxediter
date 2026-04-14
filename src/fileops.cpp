@@ -46,7 +46,7 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
         search_ptr = chunk;
         remaining = (int)got;
         while (remaining >= pattern_len) {
-            unsigned char *match = memchr(search_ptr, pattern[0],
+            unsigned char *match = (unsigned char *)memchr(search_ptr, pattern[0],
                                           remaining - pattern_len + 1);
             if (!match)
                 break;

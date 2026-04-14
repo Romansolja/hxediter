@@ -1,14 +1,14 @@
-CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -Iinclude
+CXX     = g++
+CXXFLAGS = -Wall -Wextra -O2 -std=c++17 -Iinclude
 TARGET  = hxediter
-SRCS    = src/main.c src/display.c src/fileops.c src/undo.c
-OBJS    = $(SRCS:.c=.o)
+SRCS    = src/main.cpp src/display.cpp src/fileops.cpp src/undo.cpp
+OBJS    = $(SRCS:.cpp=.o)
 
 $(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^
 
-src/%.o: src/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
+src/%.o: src/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) $(TARGET)
