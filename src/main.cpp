@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 static void glfw_error_callback(int error, const char* description) {
     std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -65,11 +66,40 @@ int main(int argc, char* argv[]) {
 
     ImGui::StyleColorsDark();
 
-    /* Load Consolas if available, else fall back to default */
-    ImFont* font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\consola.ttf", 16.0f);
-    if (!font) {
-        io.Fonts->AddFontDefault();
+    ImFontConfig ui_cfg;
+    ui_cfg.OversampleH = 3;
+    ui_cfg.OversampleV = 2;
+    ImFontConfig mono_cfg = ui_cfg;
+
+    const std::vector<std::string> ui_font_candidates = {
+        "assets/fonts/Roboto-Regular.ttf",
+        "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
+        "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
+        "C:\\Windows\\Fonts\\Roboto-Regular.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    };
+    const std::vector<std::string> mono_font_candidates = {
+        "assets/fonts/JetBrainsMono-Regular.ttf",
+        "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
+        "C:\\Windows\\Fonts\\JetBrainsMono-Regular.ttf",
+        "C:\\Windows\\Fonts\\consola.ttf",
+    };
+
+    ImFont* ui_font = nullptr;
+    for (const auto& path : ui_font_candidates) {
+        ui_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 17.0f, &ui_cfg);
+        if (ui_font) break;
     }
+    ImFont* mono_font = nullptr;
+    for (const auto& path : mono_font_candidates) {
+        mono_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 16.0f, &mono_cfg);
+        if (mono_font) break;
+    }
+    if (!ui_font) ui_font = io.Fonts->AddFontDefault();
+    if (!mono_font) mono_font = ui_font;
+    io.FontDefault = ui_font;
+    SetEditorFonts(ui_font, mono_font);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");

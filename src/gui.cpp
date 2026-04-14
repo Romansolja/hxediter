@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <inttypes.h>
+#include <cmath>
 
 namespace {
 
@@ -38,6 +39,9 @@ FocusField  g_focus_field  = FOCUS_NONE;
 /* Help / onboarding panel */
 bool g_show_help        = true;   /* visible until user starts working */
 bool g_user_interacted  = false;  /* sticky once user has done anything */
+float g_help_anim       = 1.0f;   /* 0..1 smooth visibility */
+ImFont* g_ui_font       = nullptr;
+ImFont* g_mono_font     = nullptr;
 
 void SetStatus(const std::string& msg, StatusKind kind = STATUS_INFO) {
     g_status_msg   = msg;
@@ -186,19 +190,48 @@ void CommitEdit(HexEditorCore& core) {
 /* row land on the exact same x coordinates. All values are relative  */
 /* to the start of the line in the current ImGui window.              */
 struct HexLayout {
+    int bytes_per_line;
     float char_w;
     float byte_w;
     float offset_w;
-    float byte_x[BYTES_PER_LINE];
+    std::vector<float> byte_x;
     float ascii_x;
     float row_total_w;
 };
 
-HexLayout ComputeHexLayout() {
+float ComputeHexRowWidth(float offset_w, float char_w, float byte_w, int bytes_per_line) {
+    const float gap_byte  = char_w * 0.7f;
+    const float gap_quad  = char_w * 0.7f;
+    const float gap_octet = char_w * 1.2f;
+    float x = offset_w + char_w * 2.0f;
+    for (int i = 0; i < bytes_per_line; ++i) {
+        x += byte_w;
+        if (i == bytes_per_line - 1) continue;
+        x += gap_byte;
+        if (((i + 1) % 4) == 0) x += gap_quad;
+        if (((i + 1) % 8) == 0) x += gap_octet;
+    }
+    float ascii_x = x + char_w * 2.0f;
+    return ascii_x + char_w * (bytes_per_line + 1);
+}
+
+HexLayout ComputeHexLayout(float avail_w) {
     HexLayout L;
+    L.bytes_per_line = 16;
     L.char_w   = ImGui::CalcTextSize("0").x;
     L.byte_w   = ImGui::CalcTextSize("FF").x;
     L.offset_w = ImGui::CalcTextSize("00000000").x;
+
+    /* Responsive bytes-per-line target (snap to multiples of 4). */
+    int best = 8;
+    for (int candidate = 64; candidate >= 8; candidate -= 4) {
+        if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
+            best = candidate;
+            break;
+        }
+    }
+    L.bytes_per_line = best;
+    L.byte_x.resize((size_t)L.bytes_per_line);
 
     /* Three tiers of horizontal gap so the eye can latch onto 4- and  *
      * 8-byte groups without explicit separator glyphs.                */
@@ -207,16 +240,16 @@ HexLayout ComputeHexLayout() {
     const float gap_octet = L.char_w * 1.2f;   /* extra at every 8 bytes*/
 
     float x = L.offset_w + L.char_w * 2.0f; /* gap after offset column */
-    for (int i = 0; i < BYTES_PER_LINE; ++i) {
+    for (int i = 0; i < L.bytes_per_line; ++i) {
         L.byte_x[i] = x;
         x += L.byte_w;
-        if (i == BYTES_PER_LINE - 1) continue;
+        if (i == L.bytes_per_line - 1) continue;
         x += gap_byte;
         if (((i + 1) % 4) == 0) x += gap_quad;
         if (((i + 1) % 8) == 0) x += gap_octet;
     }
     L.ascii_x     = x + L.char_w * 2.0f;
-    L.row_total_w = L.ascii_x + L.char_w * (BYTES_PER_LINE + 1);
+    L.row_total_w = L.ascii_x + L.char_w * (L.bytes_per_line + 1);
     return L;
 }
 
@@ -243,7 +276,7 @@ void RenderHexHeader(const HexLayout& L) {
     ImGui::PushStyleColor(ImGuiCol_Text, hdr_text);
 
     ImGui::TextUnformatted("Offset");
-    for (int c = 0; c < BYTES_PER_LINE; ++c) {
+    for (int c = 0; c < L.bytes_per_line; ++c) {
         ImGui::SameLine(L.byte_x[c]);
         ImGui::Text("%02X", c);
     }
@@ -256,7 +289,7 @@ void RenderHexHeader(const HexLayout& L) {
 
 /* Forward declaration: the help panel is defined further down with   *
  * the status-bar helpers but is rendered from inside the grid body.   */
-void RenderHelpPanel();
+void RenderHelpPanel(float visibility);
 
 /* ------------------------------------------------------------------ */
 /* Hex grid body                                                      */
@@ -268,11 +301,11 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
     size_t  byte_count = page.size();
 
     const ImU32 zebra_col   = ImGui::GetColorU32(ImVec4(1.00f, 1.00f, 1.00f, 0.025f));
-    const ImU32 caret_col   = ImGui::GetColorU32(ImVec4(0.30f, 0.55f, 0.95f, 0.45f));
     const ImU32 hit_col     = ImGui::GetColorU32(ImVec4(0.20f, 0.70f, 0.25f, 0.55f));
 
-    for (int line = 0; line < LINES_PER_PAGE; ++line) {
-        size_t  line_start = (size_t)line * BYTES_PER_LINE;
+    int lines = (int)((byte_count + (size_t)L.bytes_per_line - 1) / (size_t)L.bytes_per_line);
+    for (int line = 0; line < lines; ++line) {
+        size_t  line_start = (size_t)line * (size_t)L.bytes_per_line;
         if (line_start >= byte_count) break;
         int64_t line_off   = base + (int64_t)line_start;
 
@@ -290,7 +323,7 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
         ImGui::TextDisabled("%08" PRIX64, (uint64_t)line_off);
 
         /* Hex bytes */
-        for (int c = 0; c < BYTES_PER_LINE; ++c) {
+        for (int c = 0; c < L.bytes_per_line; ++c) {
             size_t  idx = line_start + (size_t)c;
             if (idx >= byte_count) break;
             int64_t off = base + (int64_t)idx;
@@ -323,11 +356,18 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
                 bool is_caret = (g_caret_byte == off);
                 bool is_hit   = (g_last_hit   == off);
                 if (is_caret || is_hit) {
+                    float pulse = 1.0f;
+                    if (is_caret && g_selected_byte >= 0) {
+                        pulse = 0.72f + 0.28f * (std::sinf((float)ImGui::GetTime() * 5.0f) * 0.5f + 0.5f);
+                    }
+                    ImU32 bg_col = is_hit ? hit_col :
+                        ImGui::GetColorU32(ImVec4(0.30f, 0.55f, 0.95f, 0.45f * pulse));
                     ImVec2 cp = ImGui::GetCursorScreenPos();
                     ImGui::GetWindowDrawList()->AddRectFilled(
                         ImVec2(cp.x - 1, cp.y),
                         ImVec2(cp.x + L.byte_w + 1, cp.y + ImGui::GetTextLineHeight() + 2),
-                        is_hit ? hit_col : caret_col);
+                        bg_col,
+                        3.0f);
                 }
 
                 ImVec4 col = ColorForByte(b);
@@ -358,22 +398,21 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
 
         /* ASCII column — pinned to its own column x. */
         ImGui::SameLine(L.ascii_x);
-        char ascii[BYTES_PER_LINE + 1];
-        int  acount = 0;
-        for (int c = 0; c < BYTES_PER_LINE; ++c) {
+        std::string ascii;
+        ascii.reserve((size_t)L.bytes_per_line);
+        for (int c = 0; c < L.bytes_per_line; ++c) {
             size_t idx = line_start + (size_t)c;
             if (idx >= byte_count) break;
             unsigned char b = page[idx];
-            ascii[acount++] = (b >= 0x20 && b <= 0x7E) ? (char)b : '.';
+            ascii.push_back((b >= 0x20 && b <= 0x7E) ? (char)b : '.');
         }
-        ascii[acount] = '\0';
-        ImGui::TextUnformatted(ascii);
+        ImGui::TextUnformatted(ascii.c_str());
     }
 
     /* Help panel fills leftover vertical space until the user starts  *
      * working. Rendered inside the grid child so it scrolls with it.  */
-    if (g_show_help) {
-        RenderHelpPanel();
+    if (g_help_anim > 0.01f) {
+        RenderHelpPanel(g_help_anim);
     }
 }
 
@@ -475,7 +514,9 @@ void RenderToolbar(HexEditorCore& core) {
 /* ------------------------------------------------------------------ */
 /* Renders a small colored pill that lines up with surrounding         *
  * frame-padded text (call AlignTextToFramePadding once per row).      */
-void Badge(const char* text, ImVec4 bg, ImVec4 fg) {
+void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha = 1.0f) {
+    bg.w *= alpha;
+    fg.w *= alpha;
     ImVec2 ts      = ImGui::CalcTextSize(text);
     ImVec2 padding = ImVec2(7.0f, 2.0f);
     ImVec2 p0      = ImGui::GetCursorScreenPos();
@@ -515,7 +556,7 @@ const char* GetContextualHint(const HexEditorCore& core) {
 /* Drawn inside the grid child window after the rows when there is    *
  * leftover vertical space. Goes away as soon as the user does        *
  * anything; recall with F1 or the toolbar button.                    */
-void RenderHelpPanel() {
+void RenderHelpPanel(float visibility) {
     float remaining = ImGui::GetContentRegionAvail().y;
     if (remaining < 90.0f) return;
 
@@ -545,29 +586,36 @@ void RenderHelpPanel() {
     int n = (int)(sizeof(lines) / sizeof(lines[0]));
     float line_h = ImGui::GetTextLineHeightWithSpacing();
     float panel_h = pad_y * 2 + line_h * (float)n;
+    float shown_h = panel_h * visibility;
 
-    if (panel_h > remaining - 8.0f) {
+    if (shown_h > remaining - 8.0f || shown_h < 20.0f) {
         if (indent > 0.0f) ImGui::Unindent(indent);
         return;
     }
 
-    ImVec2 p1(p0.x + panel_w, p0.y + panel_h);
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImVec4(0.13f, 0.15f, 0.19f, 1.0f)), 6.0f);
-    dl->AddRect      (p0, p1, ImGui::GetColorU32(ImVec4(0.32f, 0.40f, 0.55f, 1.0f)), 6.0f, 0, 1.5f);
+    ImVec2 p1(p0.x + panel_w, p0.y + shown_h);
+    dl->AddRectFilled(ImVec2(p0.x + 4.0f, p0.y + 5.0f), ImVec2(p1.x + 6.0f, p1.y + 8.0f),
+                      ImGui::GetColorU32(ImVec4(0.00f, 0.00f, 0.00f, 0.20f * visibility)), 8.0f);
+    dl->AddRectFilled(ImVec2(p0.x + 2.0f, p0.y + 3.0f), ImVec2(p1.x + 3.0f, p1.y + 4.0f),
+                      ImGui::GetColorU32(ImVec4(0.00f, 0.00f, 0.00f, 0.12f * visibility)), 8.0f);
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(ImVec4(0.13f, 0.15f, 0.19f, 0.96f * visibility)), 6.0f);
+    dl->AddRect      (p0, p1, ImGui::GetColorU32(ImVec4(0.32f, 0.40f, 0.55f, 0.95f * visibility)), 6.0f, 0, 1.5f);
 
     /* Close (X) button in the top-right corner. */
     const float x_sz = 18.0f;
     ImVec2 x_pos(p1.x - x_sz - 6.0f, p0.y + 6.0f);
-    ImGui::SetCursorScreenPos(x_pos);
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.20f, 0.20f, 0.85f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.40f, 0.12f, 0.12f, 1.00f));
-    if (ImGui::Button("##help_close", ImVec2(x_sz, x_sz))) {
-        g_show_help = false;
+    if (visibility > 0.75f) {
+        ImGui::SetCursorScreenPos(x_pos);
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.20f, 0.20f, 0.85f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.40f, 0.12f, 0.12f, 1.00f));
+        if (ImGui::Button("##help_close", ImVec2(x_sz, x_sz))) {
+            g_show_help = false;
+        }
+        ImGui::PopStyleColor(3);
     }
-    ImGui::PopStyleColor(3);
     /* Draw the X glyph on top of the (transparent) button. */
-    ImU32 x_col = ImGui::GetColorU32(ImVec4(0.85f, 0.88f, 0.95f, 1.0f));
+    ImU32 x_col = ImGui::GetColorU32(ImVec4(0.85f, 0.88f, 0.95f, visibility));
     float pad   = 5.0f;
     dl->AddLine(ImVec2(x_pos.x + pad,        x_pos.y + pad),
                 ImVec2(x_pos.x + x_sz - pad, x_pos.y + x_sz - pad), x_col, 1.5f);
@@ -578,16 +626,20 @@ void RenderHelpPanel() {
      * for the close button, so reset to just below p0 first.           */
     ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + pad_y));
     for (int i = 0; i < n; ++i) {
+        float line_y = p0.y + pad_y + line_h * (float)i;
+        if (line_y + line_h > p1.y - pad_y * 0.25f) break;
         ImGui::SetCursorScreenPos(
-            ImVec2(p0.x + pad_x, p0.y + pad_y + line_h * (float)i));
+            ImVec2(p0.x + pad_x, line_y));
         if (i == 0) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.97f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.97f, 1.0f, visibility));
             ImGui::TextUnformatted(lines[i]);
             ImGui::PopStyleColor();
         } else if (lines[i][0] == '\0') {
             /* spacer row, nothing to draw */
         } else {
-            ImGui::TextDisabled("%s", lines[i]);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.66f, 0.74f, visibility));
+            ImGui::TextUnformatted(lines[i]);
+            ImGui::PopStyleColor();
         }
     }
 
@@ -676,8 +728,11 @@ void RenderStatusBar(HexEditorCore& core) {
             case STATUS_ERROR: bg = err_bg;     fg = err_fg;     break;
             default:           bg = neutral_bg; fg = neutral_fg; break;
         }
+        const float fade_window = 0.5f;
+        float alpha = (g_status_timer >= fade_window) ? 1.0f
+                                                       : ImClamp(g_status_timer / fade_window, 0.0f, 1.0f);
         ImGui::SameLine(0, 14);
-        Badge(g_status_msg.c_str(), bg, fg);
+        Badge(g_status_msg.c_str(), bg, fg, alpha);
         g_status_timer -= ImGui::GetIO().DeltaTime;
     }
 
@@ -719,7 +774,16 @@ void HandleShortcuts(HexEditorCore& core) {
 /* ------------------------------------------------------------------ */
 /* Public entry                                                       */
 /* ------------------------------------------------------------------ */
+void SetEditorFonts(ImFont* ui_font, ImFont* mono_font) {
+    g_ui_font = ui_font;
+    g_mono_font = mono_font;
+}
+
 void RenderHexEditorUI(HexEditorCore& core) {
+    float dt = ImGui::GetIO().DeltaTime;
+    float t = ImClamp(dt * 10.0f, 0.0f, 1.0f);
+    g_help_anim = ImLerp(g_help_anim, g_show_help ? 1.0f : 0.0f, t);
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
@@ -755,26 +819,32 @@ void RenderHexEditorUI(HexEditorCore& core) {
      * follow keyboard focus.                                          */
     g_focus_field = (g_selected_byte >= 0) ? FOCUS_BYTE : FOCUS_NONE;
 
+    if (g_ui_font) ImGui::PushFont(g_ui_font);
     RenderToolbar(core);
+    if (g_ui_font) ImGui::PopFont();
     ImGui::Separator();
 
     /* Layout is shared between the header strip (rendered in the     *
      * parent window so it stays put while the body scrolls) and the  *
      * grid body (rendered inside the child). Zero left padding on    *
      * the child window keeps both rows aligned to the same X.        */
-    HexLayout layout = ComputeHexLayout();
+    if (g_mono_font) ImGui::PushFont(g_mono_font);
+    HexLayout layout = ComputeHexLayout(ImGui::GetContentRegionAvail().x);
     RenderHexHeader(layout);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexview",
                       ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
                       false,
-                      ImGuiWindowFlags_HorizontalScrollbar);
+                      ImGuiWindowFlags_None);
     ImGui::PopStyleVar();
     RenderHexGrid(core, layout);
     ImGui::EndChild();
+    if (g_mono_font) ImGui::PopFont();
 
+    if (g_ui_font) ImGui::PushFont(g_ui_font);
     RenderStatusBar(core);
+    if (g_ui_font) ImGui::PopFont();
 
     HandleShortcuts(core);
 
