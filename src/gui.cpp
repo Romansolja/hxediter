@@ -398,15 +398,16 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
 
         /* ASCII column — pinned to its own column x. */
         ImGui::SameLine(L.ascii_x);
-        std::string ascii;
-        ascii.reserve((size_t)L.bytes_per_line);
+        char ascii_buf[65];
+        int  ascii_len = 0;
         for (int c = 0; c < L.bytes_per_line; ++c) {
             size_t idx = line_start + (size_t)c;
             if (idx >= byte_count) break;
             unsigned char b = page[idx];
-            ascii.push_back((b >= 0x20 && b <= 0x7E) ? (char)b : '.');
+            if (ascii_len < 64) ascii_buf[ascii_len++] = (b >= 0x20 && b <= 0x7E) ? (char)b : '.';
         }
-        ImGui::TextUnformatted(ascii.c_str());
+        ascii_buf[ascii_len] = '\0';
+        ImGui::TextUnformatted(ascii_buf);
     }
 
     /* Help panel fills leftover vertical space until the user starts  *
