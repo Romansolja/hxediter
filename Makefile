@@ -1,7 +1,7 @@
 CXX     = g++
 CXXFLAGS = -Wall -Wextra -O2 -std=c++17 -Iinclude
 TARGET  = hxediter
-SRCS    = src/main.cpp src/display.cpp src/fileops.cpp src/undo.cpp
+SRCS    = src/main.cpp src/hex_editor_core.cpp src/display.cpp src/fileops.cpp src/undo.cpp
 OBJS    = $(SRCS:.cpp=.o)
 
 $(TARGET): $(OBJS)

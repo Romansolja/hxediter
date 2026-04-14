@@ -62,6 +62,25 @@ void display_page(FILE *fp, int64_t page_offset)
     }
 }
 
+/* Displays one page from an in-memory buffer (no FILE* needed).
+ * Used by the HexEditorCore-based workflow. */
+void display_page_data(const unsigned char *data, size_t len, int64_t page_offset)
+{
+    if (len == 0) {
+        printf("(End of file)\n");
+        return;
+    }
+
+    printf("\n");
+    for (size_t i = 0; i < len; i += BYTES_PER_LINE) {
+        int line_len = BYTES_PER_LINE;
+        if (len - i < BYTES_PER_LINE)
+            line_len = (int)(len - i);
+
+        print_hex_line(data + i, line_len, page_offset + (int64_t)i);
+    }
+}
+
 /* Shows current position and available commands */
 void print_status(int64_t page_offset, int64_t file_size)
 {

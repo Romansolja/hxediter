@@ -7,6 +7,7 @@
 
 void print_hex_line(const unsigned char *buf, int len, int64_t offset);
 void display_page(FILE *fp, int64_t page_offset);
+void display_page_data(const unsigned char *data, size_t len, int64_t page_offset);
 void print_status(int64_t page_offset, int64_t file_size);
 
 #endif /* DISPLAY_H */

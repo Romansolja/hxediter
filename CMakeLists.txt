@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(hxediter
     src/main.cpp
+    src/hex_editor_core.cpp
     src/display.cpp
     src/fileops.cpp
     src/undo.cpp

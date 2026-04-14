@@ -1,160 +1,120 @@
 /* hxediter — Interactive hex viewer/editor */
 
-#include "editor.h"
+#include "hex_editor_core.h"
 #include "display.h"
-#include "fileops.h"
-#include "undo.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
+
+static void show_page(HexEditorCore& core)
+{
+    auto data = core.GetPageData();
+    display_page_data(data.data(), data.size(), core.GetCurrentOffset());
+    print_status(core.GetCurrentOffset(), core.GetFileSize());
+}
 
 int main(int argc, char *argv[])
 {
-    EditorState state = {};
-
-    /* Check args and open file */
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
         return 1;
     }
 
-    state.filename = argv[1];
+    HexEditorCore core(argv[1]);
 
-    /* Try read+write first; fall back to read-only for files we cannot modify
-     * (system files, executables in use, files with read-only permissions). */
-    state.fp = fopen(state.filename, "rb+");
-    if (state.fp == NULL) {
-        state.fp = fopen(state.filename, "rb");
-        if (state.fp == NULL) {
-            fprintf(stderr, "Error: cannot open '%s'\n", state.filename);
-            return 1;
-        }
-        state.is_readonly = 1;
-    }
-
-    /* Get file size */
-    state.file_size = get_file_size(state.fp);
-    if (state.file_size < 0) {
-        fprintf(stderr, "Error: cannot determine file size\n");
-        fclose(state.fp);
-        return 1;
-    }
-    if (state.file_size == 0) {
+    if (core.GetFileSize() == 0) {
         printf("File is empty.\n");
-        fclose(state.fp);
         return 0;
     }
 
-    /* Show first page */
     printf("=== hxediter: %s (%" PRId64 " bytes)%s ===\n",
-           state.filename, state.file_size,
-           state.is_readonly ? " [READ-ONLY]" : "");
-    display_page(state.fp, state.page_offset);
-    print_status(state.page_offset, state.file_size);
+           core.GetFilename().c_str(), core.GetFileSize(),
+           core.IsReadOnly() ? " [READ-ONLY]" : "");
+    show_page(core);
 
-    /* Command loop */
+    char input_buf[INPUT_BUF_SIZE];
+
     while (1) {
         printf("> ");
 
-        if (fgets(state.input_buf, sizeof(state.input_buf), stdin) == NULL)
+        if (fgets(input_buf, sizeof(input_buf), stdin) == NULL)
             break;
 
-        switch (tolower((unsigned char)state.input_buf[0])) {
+        switch (tolower((unsigned char)input_buf[0])) {
 
         case 'n':
         case '\n':
-            if (state.page_offset + PAGE_SIZE < state.file_size) {
-                state.page_offset += PAGE_SIZE;
-                display_page(state.fp, state.page_offset);
-                print_status(state.page_offset, state.file_size);
+            if (core.PageNext()) {
+                show_page(core);
             } else {
                 printf("Already at the end of the file.\n");
             }
             break;
 
         case 'p':
-            if (state.page_offset >= PAGE_SIZE) {
-                state.page_offset -= PAGE_SIZE;
-            } else if (state.page_offset > 0) {
-                state.page_offset = 0;
+            if (core.PagePrev()) {
+                show_page(core);
             } else {
                 printf("Already at the start of the file.\n");
-                break;
             }
-            display_page(state.fp, state.page_offset);
-            print_status(state.page_offset, state.file_size);
             break;
 
         case 'g': {
             uint64_t new_offset = 0;
 
-            if (sscanf(state.input_buf + 1, " %" SCNx64, &new_offset) != 1) {
+            if (sscanf(input_buf + 1, " %" SCNx64, &new_offset) != 1) {
                 printf("Usage: g <hex_offset>   (example: g 1A0)\n");
                 break;
             }
 
-            if (new_offset >= (uint64_t)state.file_size) {
+            if (!core.GoToOffset(static_cast<int64_t>(new_offset))) {
                 printf("Offset 0x%" PRIX64 " is out of range (file is 0x%" PRIX64 " bytes)\n",
-                       new_offset, state.file_size);
+                       new_offset, core.GetFileSize());
                 break;
             }
 
-            state.page_offset = (int64_t)((new_offset / PAGE_SIZE) * PAGE_SIZE);
-            display_page(state.fp, state.page_offset);
-            print_status(state.page_offset, state.file_size);
+            show_page(core);
             printf("  (Jumped to page containing offset 0x%08" PRIX64 ")\n", new_offset);
             break;
         }
 
         case 's': {
-            unsigned char pattern[MAX_SEARCH_BYTES];
-            int pattern_len = 0;
-            char *p = state.input_buf + 1;
-            int64_t result;
+            std::vector<unsigned char> pattern;
+            char *p = input_buf + 1;
 
-            /* Parse space-separated hex bytes from input using strtol.
-             * strtol sets end_ptr to the first unparsed character, so we
-             * can safely advance p without needing %n. */
-            while (pattern_len < MAX_SEARCH_BYTES) {
+            while (pattern.size() < MAX_SEARCH_BYTES) {
                 char *end_ptr;
-                long byte_val;
 
-                /* Skip leading whitespace so end_ptr == p means "no digits" */
                 while (*p == ' ' || *p == '\t')
                     p++;
                 if (*p == '\0')
                     break;
 
-                byte_val = strtol(p, &end_ptr, 16);
-                if (end_ptr == p)              /* no hex digits consumed */
+                long byte_val = strtol(p, &end_ptr, 16);
+                if (end_ptr == p)
                     break;
                 if (byte_val < 0 || byte_val > 0xFF) {
                     printf("Byte value out of range (00-FF): %lX\n", byte_val);
-                    pattern_len = 0;           /* abort this search */
+                    pattern.clear();
                     break;
                 }
 
-                pattern[pattern_len++] = (unsigned char)byte_val;
+                pattern.push_back(static_cast<unsigned char>(byte_val));
                 p = end_ptr;
             }
 
-            if (pattern_len == 0) {
+            if (pattern.empty()) {
                 printf("Usage: s <hex bytes>   (example: s 48 65 6C 6C 6F)\n");
                 break;
             }
 
-            printf("Searching for %d byte(s)...\n", pattern_len);
-            result = search_bytes(state.fp, state.file_size,
-                                  state.page_offset, pattern, pattern_len);
+            printf("Searching for %d byte(s)...\n", (int)pattern.size());
+            auto result = core.Search(pattern);
 
-            /* Wrap around to beginning if not found */
-            if (result == -1 && state.page_offset > 0) {
-                printf("  (Wrapping around to start of file...)\n");
-                result = search_bytes(state.fp, state.file_size, 0, pattern, pattern_len);
-            }
-
-            if (result != -1) {
-                state.page_offset = (result / PAGE_SIZE) * PAGE_SIZE;
-                display_page(state.fp, state.page_offset);
-                print_status(state.page_offset, state.file_size);
-                printf("  Found at offset 0x%08" PRIX64 " (%" PRId64 ")\n", result, result);
+            if (result) {
+                show_page(core);
+                printf("  Found at offset 0x%08" PRIX64 " (%" PRId64 ")\n",
+                       result->offset, result->offset);
             } else {
                 printf("  Pattern not found.\n");
             }
@@ -164,22 +124,14 @@ int main(int argc, char *argv[])
         case 'e': {
             uint64_t edit_offset = 0;
             unsigned int byte_val = 0;
-            int old_ch;
-            unsigned char old_val;
 
-            if (state.is_readonly) {
+            if (core.IsReadOnly()) {
                 printf("Error: File opened in read-only mode.\n");
                 break;
             }
 
-            if (sscanf(state.input_buf + 1, " %" SCNx64 " %x", &edit_offset, &byte_val) != 2) {
+            if (sscanf(input_buf + 1, " %" SCNx64 " %x", &edit_offset, &byte_val) != 2) {
                 printf("Usage: e <hex_offset> <hex_byte>   (example: e 1A0 FF)\n");
-                break;
-            }
-
-            if (edit_offset >= (uint64_t)state.file_size) {
-                printf("Offset 0x%" PRIX64 " is out of range (file is 0x%" PRIX64 " bytes)\n",
-                       edit_offset, state.file_size);
                 break;
             }
 
@@ -188,64 +140,43 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            /* Read the existing byte so we can save it for undo. */
-            if (fseek64(state.fp, (int64_t)edit_offset, SEEK_SET) != 0 ||
-                (old_ch = fgetc(state.fp)) == EOF) {
-                printf("Error: cannot read byte at offset 0x%" PRIX64 "\n", edit_offset);
-                break;
+            auto result = core.EditByte(static_cast<int64_t>(edit_offset),
+                                        static_cast<unsigned char>(byte_val));
+
+            if (result) {
+                show_page(core);
+                printf("  Changed byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X\n",
+                       result->offset, result->old_val, result->new_val);
+            } else {
+                printf("Error: failed to edit byte at 0x%" PRIX64 "\n", edit_offset);
             }
-            old_val = (unsigned char)old_ch;
-
-            if (write_byte_at(state.fp, (int64_t)edit_offset, (unsigned char)byte_val) != 0) {
-                printf("Error: failed to write byte at 0x%" PRIX64 "\n", edit_offset);
-                break;
-            }
-
-            undo_push(&state, (int64_t)edit_offset, old_val, (unsigned char)byte_val);
-
-            state.page_offset = (int64_t)((edit_offset / PAGE_SIZE) * PAGE_SIZE);
-            display_page(state.fp, state.page_offset);
-            print_status(state.page_offset, state.file_size);
-            printf("  Changed byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X\n",
-                   edit_offset, old_val, (unsigned char)byte_val);
             break;
         }
 
         case 'u': {
-            UndoEntry entry;
+            auto result = core.Undo();
 
-            if (!undo_pop(&state, &entry)) {
+            if (result) {
+                show_page(core);
+                printf("  Undid byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X (%d undo(s) left)\n",
+                       result->offset, result->undone_val, result->restored_val,
+                       result->remaining_undos);
+            } else {
                 printf("Nothing to undo.\n");
-                break;
             }
-
-            if (write_byte_at(state.fp, entry.offset, entry.old_val) != 0) {
-                printf("Error: failed to write byte at 0x%" PRIX64 "\n", entry.offset);
-                /* Roll head forward again so the failed undo stays on the stack */
-                undo_unpop(&state);
-                break;
-            }
-
-            state.page_offset = (entry.offset / PAGE_SIZE) * PAGE_SIZE;
-            display_page(state.fp, state.page_offset);
-            print_status(state.page_offset, state.file_size);
-            printf("  Undid byte at 0x%08" PRIX64 ": 0x%02X -> 0x%02X (%d undo(s) left)\n",
-                   entry.offset, entry.new_val, entry.old_val, state.undo_count);
             break;
         }
 
         case 'q':
             printf("Goodbye!\n");
-            fclose(state.fp);
             return 0;
 
         default:
             printf("Unknown command '%c'. Commands: [N]ext [P]rev [G offset] [S hex] [E offset byte] [U]ndo [Q]uit\n",
-                   state.input_buf[0]);
+                   input_buf[0]);
             break;
         }
     }
 
-    fclose(state.fp);
     return 0;
 }
