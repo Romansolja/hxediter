@@ -222,12 +222,20 @@ HexLayout ComputeHexLayout(float avail_w) {
     L.byte_w   = ImGui::CalcTextSize("FF").x;
     L.offset_w = ImGui::CalcTextSize("00000000").x;
 
-    /* Responsive bytes-per-line target (snap to multiples of 4). */
-    int best = 8;
+    /* Responsive bytes-per-line target (snap to multiples of 4 when possible). */
+    int best = 1;
     for (int candidate = 64; candidate >= 8; candidate -= 4) {
         if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
             best = candidate;
             break;
+        }
+    }
+    if (best == 1) {
+        for (int candidate = 4; candidate >= 1; --candidate) {
+            if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
+                best = candidate;
+                break;
+            }
         }
     }
     L.bytes_per_line = best;
