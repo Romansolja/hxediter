@@ -1,8 +1,6 @@
 # hxediter
-Version 3
+Version 4
 
-Added paging, goto, and search, editing, undo
+C++ Branch, features GUI
 
-What's next:
-ascii search
-desktop gui
+Added paging, goto, and search, editing, undo, desktop gui
