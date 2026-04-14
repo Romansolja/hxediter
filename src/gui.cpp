@@ -605,16 +605,20 @@ void RenderHelpPanel(float visibility) {
     /* Close (X) button in the top-right corner. */
     const float x_sz = 18.0f;
     ImVec2 x_pos(p1.x - x_sz - 6.0f, p0.y + 6.0f);
-    if (visibility > 0.75f) {
-        ImGui::SetCursorScreenPos(x_pos);
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.20f, 0.20f, 0.85f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.40f, 0.12f, 0.12f, 1.00f));
-        if (ImGui::Button("##help_close", ImVec2(x_sz, x_sz))) {
-            g_show_help = false;
-        }
-        ImGui::PopStyleColor(3);
+    ImGui::SetCursorScreenPos(x_pos);
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.20f, 0.20f, 0.85f * visibility));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.40f, 0.12f, 0.12f, 1.00f * visibility));
+    if (visibility <= 0.0f) {
+        ImGui::BeginDisabled();
     }
+    if (ImGui::Button("##help_close", ImVec2(x_sz, x_sz))) {
+        g_show_help = false;
+    }
+    if (visibility <= 0.0f) {
+        ImGui::EndDisabled();
+    }
+    ImGui::PopStyleColor(3);
     /* Draw the X glyph on top of the (transparent) button. */
     ImU32 x_col = ImGui::GetColorU32(ImVec4(0.85f, 0.88f, 0.95f, visibility));
     float pad   = 5.0f;
