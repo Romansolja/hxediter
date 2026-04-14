@@ -341,8 +341,15 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
             ImGui::PushID((int)idx + line * 64);
 
             if (g_selected_byte == off) {
-                /* Inline editor */
-                ImGui::SetNextItemWidth(L.byte_w + 6.0f);
+                /* Inline editor. Push zero FramePadding and match the   *
+                 * field width to a normal byte cell so the InputText    *
+                 * occupies exactly the same box as the Selectable would *
+                 * — otherwise the taller framed widget would push the   *
+                 * ASCII column on this row down and the wider field     *
+                 * would visually overlap the next byte cell.            */
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,    ImVec2(0.0f, 0.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+                ImGui::SetNextItemWidth(L.byte_w);
                 ImGuiInputTextFlags flags =
                     ImGuiInputTextFlags_CharsHexadecimal |
                     ImGuiInputTextFlags_CharsUppercase   |
@@ -358,6 +365,7 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
                     /* Lost focus without Enter — cancel */
                     g_selected_byte = -1;
                 }
+                ImGui::PopStyleVar(2);
             } else {
                 /* Background highlight for caret / search hit. Drawn  *
                  * before the text so the glyph stays fully readable.  */
