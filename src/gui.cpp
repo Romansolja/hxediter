@@ -366,7 +366,7 @@ void RenderHexGrid(HexEditorCore& core, const HexLayout& L) {
                 if (is_caret || is_hit) {
                     float pulse = 1.0f;
                     if (is_caret && g_selected_byte >= 0) {
-                        pulse = 0.72f + 0.28f * (std::sinf((float)ImGui::GetTime() * 5.0f) * 0.5f + 0.5f);
+                        pulse = 0.72f + 0.28f * (std::sin((float)ImGui::GetTime() * 5.0f) * 0.5f + 0.5f);
                     }
                     ImU32 bg_col = is_hit ? hit_col :
                         ImGui::GetColorU32(ImVec4(0.30f, 0.55f, 0.95f, 0.45f * pulse));
@@ -742,8 +742,10 @@ void RenderStatusBar(HexEditorCore& core) {
             default:           bg = neutral_bg; fg = neutral_fg; break;
         }
         const float fade_window = 0.5f;
-        float alpha = (g_status_timer >= fade_window) ? 1.0f
-                                                       : ImClamp(g_status_timer / fade_window, 0.0f, 1.0f);
+        float alpha_raw = g_status_timer / fade_window;
+        if (alpha_raw < 0.0f) alpha_raw = 0.0f;
+        if (alpha_raw > 1.0f) alpha_raw = 1.0f;
+        float alpha = (g_status_timer >= fade_window) ? 1.0f : alpha_raw;
         ImGui::SameLine(0, 14);
         Badge(g_status_msg.c_str(), bg, fg, alpha);
         g_status_timer -= ImGui::GetIO().DeltaTime;
@@ -794,8 +796,11 @@ void SetEditorFonts(ImFont* ui_font, ImFont* mono_font) {
 
 void RenderHexEditorUI(HexEditorCore& core) {
     float dt = ImGui::GetIO().DeltaTime;
-    float t = ImClamp(dt * 10.0f, 0.0f, 1.0f);
-    g_help_anim = ImLerp(g_help_anim, g_show_help ? 1.0f : 0.0f, t);
+    float t = dt * 10.0f;
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float help_target = g_show_help ? 1.0f : 0.0f;
+    g_help_anim = g_help_anim + (help_target - g_help_anim) * t;
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);

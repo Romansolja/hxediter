@@ -11,9 +11,15 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+static bool FileExists(const std::string& path) {
+    std::ifstream f(path.c_str(), std::ios::binary);
+    return f.good();
+}
 
 static void glfw_error_callback(int error, const char* description) {
     std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -88,11 +94,13 @@ int main(int argc, char* argv[]) {
 
     ImFont* ui_font = nullptr;
     for (const auto& path : ui_font_candidates) {
+        if (!FileExists(path)) continue;
         ui_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 17.0f, &ui_cfg);
         if (ui_font) break;
     }
     ImFont* mono_font = nullptr;
     for (const auto& path : mono_font_candidates) {
+        if (!FileExists(path)) continue;
         mono_font = io.Fonts->AddFontFromFileTTF(path.c_str(), 16.0f, &mono_cfg);
         if (mono_font) break;
     }
