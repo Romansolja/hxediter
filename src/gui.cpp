@@ -673,6 +673,7 @@ void RenderHelpPanel(float visibility) {
     /* Park the cursor below the panel so anything that follows lands  *
      * in the right place.                                              */
     ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y + 4.0f));
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
 
     if (indent > 0.0f) ImGui::Unindent(indent);
 }
