@@ -3,13 +3,30 @@
 #pragma once
 
 #include "hex_editor_core.h"
+#include "app_state.h"
+
+#include <string>
 
 struct ImFont;
 
-/* Render one frame of the hex editor UI. Call between ImGui::NewFrame() and
- * ImGui::Render() in the main loop. */
-void SetEditorFonts(ImFont* ui_font, ImFont* mono_font);
-/* core may be null — pass null to render the drop-zone welcome screen.
- * load_error is an optional message shown on the welcome screen (may be null
- * or empty). */
-void RenderHexEditorUI(HexEditorCore* core, const char* load_error);
+/* Set the four fonts used by the editor. All may be null — the UI falls back
+ * gracefully (small elements use the default font, the start-screen icon
+ * degrades to a drawn rectangle when icon_font is null). */
+void SetEditorFonts(ImFont* ui_font,
+                    ImFont* mono_font,
+                    ImFont* title_font,
+                    ImFont* icon_font);
+
+/* Render one frame of the editor UI. Call between ImGui::NewFrame() and
+ * ImGui::Render() in the main loop.
+ *
+ * state           — which screen to render (StartScreen or HexView).
+ * core            — non-null iff state == HexView.
+ * load_error      — optional message shown on the start screen (may be null).
+ * out_pending_path— non-null; the start screen's Select File button writes
+ *                   the chosen path here, and the main loop consumes it on
+ *                   the next iteration the same way it consumes GLFW drops. */
+void RenderHexEditorUI(AppState state,
+                       HexEditorCore* core,
+                       const char* load_error,
+                       std::string* out_pending_path);

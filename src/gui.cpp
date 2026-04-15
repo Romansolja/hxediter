@@ -2,6 +2,9 @@
 
 #include "gui.h"
 #include "platform.h"
+#include "app_state.h"
+#include "IconsFontAwesome6.h"
+#include "ImGuiFileDialog.h"
 
 #include "imgui.h"
 
@@ -9,6 +12,7 @@
 #include <cstring>
 #include <cctype>
 #include <cstdint>
+#include <cfloat>
 #include <string>
 #include <vector>
 #include <inttypes.h>
@@ -42,6 +46,8 @@ bool g_user_interacted  = false;  /* sticky once user has done anything */
 float g_help_anim       = 1.0f;   /* 0..1 smooth visibility */
 ImFont* g_ui_font       = nullptr;
 ImFont* g_mono_font     = nullptr;
+ImFont* g_title_font    = nullptr;   /* 48px brand text on the start screen */
+ImFont* g_icon_font     = nullptr;   /* FontAwesome at 96px for the hero icon */
 
 void SetStatus(const std::string& msg, StatusKind kind = STATUS_INFO) {
     g_status_msg   = msg;
@@ -793,59 +799,148 @@ void HandleShortcuts(HexEditorCore& core) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Welcome / drop-zone screen (shown when no file is loaded)           */
+/* Branded start screen (shown when AppState == StartScreen)           */
 /* ------------------------------------------------------------------ */
-void RenderWelcomeScreen(const char* load_error) {
+void RenderStartScreen(const char* load_error, std::string* out_pending_path) {
     ImVec2 avail  = ImGui::GetContentRegionAvail();
     ImVec2 origin = ImGui::GetCursorScreenPos();
-
-    /* Centered dashed-style drop zone panel */
-    float panel_w = avail.x * 0.6f;
-    float panel_h = avail.y * 0.55f;
-    if (panel_w < 320.0f) panel_w = (avail.x < 320.0f) ? avail.x : 320.0f;
-    if (panel_h < 180.0f) panel_h = (avail.y < 180.0f) ? avail.y : 180.0f;
-
-    ImVec2 panel_min = ImVec2(origin.x + (avail.x - panel_w) * 0.5f,
-                              origin.y + (avail.y - panel_h) * 0.5f);
-    ImVec2 panel_max = ImVec2(panel_min.x + panel_w, panel_min.y + panel_h);
-
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    ImU32 fill   = ImGui::GetColorU32(ImVec4(0.13f, 0.15f, 0.19f, 1.00f));
-    ImU32 border = ImGui::GetColorU32(ImVec4(0.40f, 0.70f, 1.00f, 1.00f));
-    dl->AddRectFilled(panel_min, panel_max, fill, 8.0f);
-    dl->AddRect(panel_min, panel_max, border, 8.0f, 0, 3.0f);
 
-    /* Centered text block */
+    /* Soft vertical gradient background fill across the whole viewport. */
+    ImU32 top_col    = ImGui::GetColorU32(ImVec4(0.10f, 0.12f, 0.16f, 1.0f));
+    ImU32 bottom_col = ImGui::GetColorU32(ImVec4(0.06f, 0.07f, 0.10f, 1.0f));
+    dl->AddRectFilledMultiColor(
+        origin,
+        ImVec2(origin.x + avail.x, origin.y + avail.y),
+        top_col, top_col, bottom_col, bottom_col);
+
+    /* ---- Measure every element up front so the column can be centered ---- */
+    const char* title_str  = "HxEditer";
+    const char* icon_str   = ICON_FA_FILE;
+    const char* drop_str   = "Drag and drop a file here";
+    const char* button_str = "Select File";
+
+    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz;
+
+    if (g_title_font) ImGui::PushFont(g_title_font);
+    title_sz = ImGui::CalcTextSize(title_str);
+    if (g_title_font) ImGui::PopFont();
+
+    if (g_icon_font) {
+        ImGui::PushFont(g_icon_font);
+        icon_sz = ImGui::CalcTextSize(icon_str);
+        ImGui::PopFont();
+    } else {
+        icon_sz = ImVec2(96.0f, 96.0f);  /* placeholder rectangle size */
+    }
+
     if (g_ui_font) ImGui::PushFont(g_ui_font);
+    drop_sz         = ImGui::CalcTextSize(drop_str);
+    button_label_sz = ImGui::CalcTextSize(button_str);
+    if (g_ui_font) ImGui::PopFont();
 
-    const char* title = "Drop a file here to open";
-    const char* sub   = "or pass a path on the command line";
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec2 button_sz(button_label_sz.x + style.FramePadding.x * 2.0f + 40.0f,
+                     button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f);
 
-    ImVec2 title_sz = ImGui::CalcTextSize(title);
-    ImVec2 sub_sz   = ImGui::CalcTextSize(sub);
+    const float gap_icon_to_title  = 24.0f;
+    const float gap_title_to_drop  = 16.0f;
+    const float gap_drop_to_button = 28.0f;
+    const float gap_button_to_err  = 20.0f;
 
-    float total_h = title_sz.y + 8.0f + sub_sz.y;
-    if (load_error && *load_error) total_h += 16.0f + ImGui::GetTextLineHeight();
+    float col_h = icon_sz.y + gap_icon_to_title
+                + title_sz.y + gap_title_to_drop
+                + drop_sz.y  + gap_drop_to_button
+                + button_sz.y;
+    if (load_error && *load_error)
+        col_h += gap_button_to_err + ImGui::GetTextLineHeight();
 
-    float cy = panel_min.y + (panel_h - total_h) * 0.5f;
+    float col_top = origin.y + (avail.y - col_h) * 0.5f;
+    if (col_top < origin.y + 20.0f) col_top = origin.y + 20.0f;
+    float col_cx  = origin.x + avail.x * 0.5f;
 
-    ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - title_sz.x) * 0.5f, cy));
-    ImGui::TextUnformatted(title);
-    cy += title_sz.y + 8.0f;
+    /* ---- 1) Icon (hero file glyph, blue-tinted) ---- */
+    if (g_icon_font) {
+        ImGui::PushFont(g_icon_font);
+        ImGui::SetCursorScreenPos(ImVec2(col_cx - icon_sz.x * 0.5f, col_top));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.75f, 1.00f, 0.95f));
+        ImGui::TextUnformatted(icon_str);
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+    } else {
+        /* Fallback: drawn rounded rectangle when FA font is missing. */
+        ImVec2 p0(col_cx - 48.0f, col_top);
+        ImVec2 p1(col_cx + 48.0f, col_top + 96.0f);
+        dl->AddRectFilled(p0, p1,
+            ImGui::GetColorU32(ImVec4(0.40f, 0.70f, 1.00f, 0.25f)), 12.0f);
+        dl->AddRect(p0, p1,
+            ImGui::GetColorU32(ImVec4(0.40f, 0.70f, 1.00f, 1.00f)), 12.0f, 0, 2.0f);
+    }
 
-    ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - sub_sz.x) * 0.5f, cy));
-    ImGui::TextDisabled("%s", sub);
-    cy += sub_sz.y + 16.0f;
+    float y = col_top + icon_sz.y + gap_icon_to_title;
 
+    /* ---- 2) Title ---- */
+    if (g_title_font) ImGui::PushFont(g_title_font);
+    ImGui::SetCursorScreenPos(ImVec2(col_cx - title_sz.x * 0.5f, y));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.97f, 1.00f, 1.00f));
+    ImGui::TextUnformatted(title_str);
+    ImGui::PopStyleColor();
+    if (g_title_font) ImGui::PopFont();
+    y += title_sz.y + gap_title_to_drop;
+
+    /* ---- 3) Drag-and-drop hint (dimmed) ---- */
+    if (g_ui_font) ImGui::PushFont(g_ui_font);
+    ImGui::SetCursorScreenPos(ImVec2(col_cx - drop_sz.x * 0.5f, y));
+    ImGui::TextDisabled("%s", drop_str);
+    y += drop_sz.y + gap_drop_to_button;
+
+    /* ---- 4) Select File button ---- */
+    ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.48f, 0.85f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.58f, 0.95f, 1.00f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.15f, 0.40f, 0.78f, 1.00f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(20.0f, 10.0f));
+
+    if (ImGui::Button(button_str, button_sz)) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = ".";
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "HxEditerOpenFile", "Choose a file to open", ".*", cfg);
+    }
+
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(3);
+
+    y += button_sz.y;
+
+    /* ---- 5) Load error (if any) ---- */
     if (load_error && *load_error) {
+        y += gap_button_to_err;
         ImVec2 err_sz = ImGui::CalcTextSize(load_error);
-        ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - err_sz.x) * 0.5f, cy));
+        ImGui::SetCursorScreenPos(ImVec2(col_cx - err_sz.x * 0.5f, y));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.40f, 0.40f, 1.00f));
         ImGui::TextUnformatted(load_error);
         ImGui::PopStyleColor();
     }
 
     if (g_ui_font) ImGui::PopFont();
+
+    /* ---- 6) Drive the ImGuiFileDialog display / result pump ----
+     * Must be called every frame on the start screen so the dialog window,
+     * once opened, has a chance to render. Returns true when the user
+     * confirms or cancels. On confirm we write the chosen path to
+     * out_pending_path and let the main loop pick it up like a drop event. */
+    ImVec2 dlg_min(560.0f, 360.0f);
+    ImVec2 dlg_max(FLT_MAX, FLT_MAX);
+    if (ImGuiFileDialog::Instance()->Display(
+            "HxEditerOpenFile", ImGuiWindowFlags_NoCollapse, dlg_min, dlg_max)) {
+        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_path) {
+            *out_pending_path = ImGuiFileDialog::Instance()->GetFilePathName();
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
 }
 
 } /* anonymous namespace */
@@ -853,12 +948,18 @@ void RenderWelcomeScreen(const char* load_error) {
 /* ------------------------------------------------------------------ */
 /* Public entry                                                       */
 /* ------------------------------------------------------------------ */
-void SetEditorFonts(ImFont* ui_font, ImFont* mono_font) {
-    g_ui_font = ui_font;
-    g_mono_font = mono_font;
+void SetEditorFonts(ImFont* ui_font, ImFont* mono_font,
+                    ImFont* title_font, ImFont* icon_font) {
+    g_ui_font    = ui_font;
+    g_mono_font  = mono_font;
+    g_title_font = title_font;
+    g_icon_font  = icon_font;
 }
 
-void RenderHexEditorUI(HexEditorCore* core, const char* load_error) {
+void RenderHexEditorUI(AppState state,
+                       HexEditorCore* core,
+                       const char* load_error,
+                       std::string* out_pending_path) {
     float dt = ImGui::GetIO().DeltaTime;
     float t = dt * 10.0f;
     if (t < 0.0f) t = 0.0f;
@@ -902,15 +1003,18 @@ void RenderHexEditorUI(HexEditorCore* core, const char* load_error) {
      * follow keyboard focus.                                          */
     g_focus_field = (g_selected_byte >= 0) ? FOCUS_BYTE : FOCUS_NONE;
 
-    if (core == nullptr) {
-        /* No file loaded — show the drop-zone welcome screen. */
-        RenderWelcomeScreen(load_error);
+    if (state == AppState::StartScreen) {
+        /* No file loaded — show the branded start screen. */
+        RenderStartScreen(load_error, out_pending_path);
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(7);
         ImGui::End();
         return;
     }
 
+    /* Invariant: state == HexView implies core != nullptr (guaranteed by the
+     * main loop's load-completion block — a failed load resets state back to
+     * StartScreen before this function runs). */
     HexEditorCore& core_ref = *core;
 
     if (g_ui_font) ImGui::PushFont(g_ui_font);
@@ -924,7 +1028,27 @@ void RenderHexEditorUI(HexEditorCore* core, const char* load_error) {
      * the child window keeps both rows aligned to the same X.        */
     if (g_mono_font) ImGui::PushFont(g_mono_font);
     HexLayout layout = ComputeHexLayout(ImGui::GetContentRegionAvail().x);
+
+    /* Header and body MUST share the same window.Pos.x, otherwise the
+     * ImGui::SameLine(absolute_x) calls in RenderHexHeader and RenderHexGrid
+     * land at different pixels and the byte columns drift out from under
+     * the header labels. SameLine(x) is implemented as
+     *   cursor.x = window.Pos.x + x
+     * — relative to the raw window position, NOT to window.Pos.x +
+     * WindowPadding.x. If the header lived in the parent (WindowPadding.x=8)
+     * while the body lived in the child (WindowPadding.x=0), every data
+     * byte would sit 8 pixels right of its header column. Putting the
+     * header in its own child that's a sibling to ##hexview gives both
+     * the same .Pos.x (both are placed at the parent's content-left cursor)
+     * and the alignment drops into place. */
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
+    ImGui::BeginChild("##hexheader",
+                      ImVec2(0, 0),
+                      ImGuiChildFlags_AutoResizeY,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     RenderHexHeader(layout);
+    ImGui::EndChild();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexview",

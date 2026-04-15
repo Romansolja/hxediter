@@ -47,6 +47,21 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC glfw)
 
 # ---------------------------------------------------------------------------
+# ImGuiFileDialog — in-ImGui file browser (matches our dark theme)
+# SOURCE_SUBDIR points at a non-existent directory so MakeAvailable fetches
+# the source without running the upstream CMakeLists.txt. We compile the
+# single .cpp directly as part of the hxediter executable below.
+# ---------------------------------------------------------------------------
+FetchContent_Declare(
+    imguifiledialog
+    GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
+    GIT_TAG        v0.6.7
+    GIT_SHALLOW    TRUE
+    SOURCE_SUBDIR  do-not-exist
+)
+FetchContent_MakeAvailable(imguifiledialog)
+
+# ---------------------------------------------------------------------------
 # OpenGL (system library)
 # ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -60,7 +75,16 @@ add_executable(hxediter
     src/hex_editor_core.cpp
     src/fileops.cpp
     src/undo.cpp
+    ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
-target_include_directories(hxediter PRIVATE include)
+target_include_directories(hxediter PRIVATE
+    include
+    ${imguifiledialog_SOURCE_DIR}
+)
 target_link_libraries(hxediter PRIVATE imgui glfw OpenGL::GL)
+
+# Stage runtime assets (fonts) next to the binary so the relative path
+# "assets/fonts/..." used by the font loader resolves regardless of the
+# working directory CLion's Run Configuration chooses.
+file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_BINARY_DIR})
