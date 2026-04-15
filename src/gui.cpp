@@ -792,6 +792,62 @@ void HandleShortcuts(HexEditorCore& core) {
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp))    { if (core.PagePrev()) MarkInteracted(); }
 }
 
+/* ------------------------------------------------------------------ */
+/* Welcome / drop-zone screen (shown when no file is loaded)           */
+/* ------------------------------------------------------------------ */
+void RenderWelcomeScreen(const char* load_error) {
+    ImVec2 avail  = ImGui::GetContentRegionAvail();
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+
+    /* Centered dashed-style drop zone panel */
+    float panel_w = avail.x * 0.6f;
+    float panel_h = avail.y * 0.55f;
+    if (panel_w < 320.0f) panel_w = (avail.x < 320.0f) ? avail.x : 320.0f;
+    if (panel_h < 180.0f) panel_h = (avail.y < 180.0f) ? avail.y : 180.0f;
+
+    ImVec2 panel_min = ImVec2(origin.x + (avail.x - panel_w) * 0.5f,
+                              origin.y + (avail.y - panel_h) * 0.5f);
+    ImVec2 panel_max = ImVec2(panel_min.x + panel_w, panel_min.y + panel_h);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImU32 fill   = ImGui::GetColorU32(ImVec4(0.13f, 0.15f, 0.19f, 1.00f));
+    ImU32 border = ImGui::GetColorU32(ImVec4(0.40f, 0.70f, 1.00f, 1.00f));
+    dl->AddRectFilled(panel_min, panel_max, fill, 8.0f);
+    dl->AddRect(panel_min, panel_max, border, 8.0f, 0, 3.0f);
+
+    /* Centered text block */
+    if (g_ui_font) ImGui::PushFont(g_ui_font);
+
+    const char* title = "Drop a file here to open";
+    const char* sub   = "or pass a path on the command line";
+
+    ImVec2 title_sz = ImGui::CalcTextSize(title);
+    ImVec2 sub_sz   = ImGui::CalcTextSize(sub);
+
+    float total_h = title_sz.y + 8.0f + sub_sz.y;
+    if (load_error && *load_error) total_h += 16.0f + ImGui::GetTextLineHeight();
+
+    float cy = panel_min.y + (panel_h - total_h) * 0.5f;
+
+    ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - title_sz.x) * 0.5f, cy));
+    ImGui::TextUnformatted(title);
+    cy += title_sz.y + 8.0f;
+
+    ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - sub_sz.x) * 0.5f, cy));
+    ImGui::TextDisabled("%s", sub);
+    cy += sub_sz.y + 16.0f;
+
+    if (load_error && *load_error) {
+        ImVec2 err_sz = ImGui::CalcTextSize(load_error);
+        ImGui::SetCursorScreenPos(ImVec2(panel_min.x + (panel_w - err_sz.x) * 0.5f, cy));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.40f, 0.40f, 1.00f));
+        ImGui::TextUnformatted(load_error);
+        ImGui::PopStyleColor();
+    }
+
+    if (g_ui_font) ImGui::PopFont();
+}
+
 } /* anonymous namespace */
 
 /* ------------------------------------------------------------------ */
@@ -802,7 +858,7 @@ void SetEditorFonts(ImFont* ui_font, ImFont* mono_font) {
     g_mono_font = mono_font;
 }
 
-void RenderHexEditorUI(HexEditorCore& core) {
+void RenderHexEditorUI(HexEditorCore* core, const char* load_error) {
     float dt = ImGui::GetIO().DeltaTime;
     float t = dt * 10.0f;
     if (t < 0.0f) t = 0.0f;
@@ -821,7 +877,8 @@ void RenderHexEditorUI(HexEditorCore& core) {
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    std::string title = "hxediter — " + core.GetFilename();
+    std::string title = core ? ("hxediter — " + core->GetFilename())
+                              : std::string("hxediter");
     ImGui::Begin(title.c_str(), nullptr, flags);
 
     /* ----------- Accessibility / contrast tweaks ------------------- *
@@ -845,8 +902,19 @@ void RenderHexEditorUI(HexEditorCore& core) {
      * follow keyboard focus.                                          */
     g_focus_field = (g_selected_byte >= 0) ? FOCUS_BYTE : FOCUS_NONE;
 
+    if (core == nullptr) {
+        /* No file loaded — show the drop-zone welcome screen. */
+        RenderWelcomeScreen(load_error);
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(7);
+        ImGui::End();
+        return;
+    }
+
+    HexEditorCore& core_ref = *core;
+
     if (g_ui_font) ImGui::PushFont(g_ui_font);
-    RenderToolbar(core);
+    RenderToolbar(core_ref);
     if (g_ui_font) ImGui::PopFont();
     ImGui::Separator();
 
@@ -864,15 +932,15 @@ void RenderHexEditorUI(HexEditorCore& core) {
                       false,
                       ImGuiWindowFlags_None);
     ImGui::PopStyleVar();
-    RenderHexGrid(core, layout);
+    RenderHexGrid(core_ref, layout);
     ImGui::EndChild();
     if (g_mono_font) ImGui::PopFont();
 
     if (g_ui_font) ImGui::PushFont(g_ui_font);
-    RenderStatusBar(core);
+    RenderStatusBar(core_ref);
     if (g_ui_font) ImGui::PopFont();
 
-    HandleShortcuts(core);
+    HandleShortcuts(core_ref);
 
     ImGui::PopStyleVar(3);
     ImGui::PopStyleColor(7);

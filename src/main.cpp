@@ -4,6 +4,7 @@
 #include "gui.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -25,26 +27,42 @@ static void glfw_error_callback(int error, const char* description) {
     std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::fprintf(stderr, "Usage: %s <filename>\n", argv[0]);
-        return 1;
-    }
+/* Application context shared between main() and the GLFW drop callback.
+ * The drop callback only writes pending_path; the main loop consumes it. */
+struct AppContext {
+    std::unique_ptr<HexEditorCore> core;
+    std::string pending_path;
+    std::string load_error;
+    GLFWwindow* window = nullptr;
+};
 
-    /* ---- Open the file via the model ---- */
-    HexEditorCore* core = nullptr;
-    try {
-        core = new HexEditorCore(argv[1]);
-    } catch (const std::exception& e) {
-        std::fprintf(stderr, "Error: %s\n", e.what());
-        return 1;
+static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
+    auto* ctx = static_cast<AppContext*>(glfwGetWindowUserPointer(w));
+    if (ctx == nullptr || count <= 0) return;
+    /* Only the first dropped file is opened. */
+    ctx->pending_path = paths[0];
+    /* Bring the window to the foreground so the user sees the result. */
+    glfwFocusWindow(w);
+}
+
+int main(int argc, char* argv[]) {
+    AppContext ctx;
+
+    /* ---- Optional initial file from argv ---- */
+    if (argc >= 2) {
+        try {
+            ctx.core = std::make_unique<HexEditorCore>(argv[1]);
+        } catch (const std::exception& e) {
+            /* Don't bail — fall through to the welcome screen with an error. */
+            ctx.load_error = e.what();
+            std::fprintf(stderr, "Error: %s\n", e.what());
+        }
     }
 
     /* ---- GLFW init ---- */
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "Failed to initialize GLFW\n");
-        delete core;
         return 1;
     }
 
@@ -53,14 +71,17 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    std::string title = "hxediter — " + core->GetFilename();
+    std::string title = ctx.core ? ("hxediter — " + ctx.core->GetFilename())
+                                  : std::string("hxediter");
     GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create GLFW window\n");
         glfwTerminate();
-        delete core;
         return 1;
     }
+    ctx.window = window;
+    glfwSetWindowUserPointer(window, &ctx);
+    glfwSetDropCallback(window, glfw_drop_callback);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); /* vsync */
 
@@ -118,11 +139,36 @@ int main(int argc, char* argv[]) {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
+        /* ---- Consume any pending file drop from the GLFW callback ----
+         * The old core is reset *before* constructing the new one. On
+         * Windows, fopen("rb+") opens the file with write-share denied,
+         * so reopening the same path while the old handle is still alive
+         * fails with a sharing violation. The trade-off: a failed load
+         * also closes the previously-open file. The user can re-drop it
+         * from the welcome screen. */
+        if (!ctx.pending_path.empty()) {
+            std::string path = ctx.pending_path;
+            ctx.pending_path.clear();
+            ctx.core.reset();
+            try {
+                ctx.core = std::make_unique<HexEditorCore>(path);
+                ctx.load_error.clear();
+                std::string new_title = "hxediter — " + ctx.core->GetFilename();
+                glfwSetWindowTitle(window, new_title.c_str());
+                /* Drop any input focus held over from the previous file
+                 * so the new file's first frame has no ghost active item. */
+                ImGui::ClearActiveID();
+            } catch (const std::exception& e) {
+                ctx.load_error = e.what();
+                glfwSetWindowTitle(window, "hxediter");
+            }
+        }
+
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        RenderHexEditorUI(*core);
+        RenderHexEditorUI(ctx.core.get(), ctx.load_error.c_str());
 
         ImGui::Render();
         int display_w, display_h;
@@ -143,6 +189,5 @@ int main(int argc, char* argv[]) {
     glfwDestroyWindow(window);
     glfwTerminate();
 
-    delete core;
     return 0;
 }
