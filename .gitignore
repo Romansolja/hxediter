@@ -1,4 +1,39 @@
 # Build output
 build/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
 *.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
 hxediter
+*.exp
+*.pdb
+*.ilk
+
+# IDE / editor
+.idea/
+.vscode/
+.vs/
+*.swp
+*.swo
+*~
+
+# Tooling
+.claude/
+
+# Dear ImGui runtime state
+imgui.ini
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
