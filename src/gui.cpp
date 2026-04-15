@@ -673,6 +673,11 @@ void RenderHelpPanel(float visibility) {
     /* Park the cursor below the panel so anything that follows lands  *
      * in the right place.                                              */
     ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y + 4.0f));
+    /* Submit a zero-size item so ImGui's layout bookkeeping (CursorMaxPos, *
+     * last-item rect) registers the manually-moved cursor. Without this,   *
+     * the next widget can trip a cursor/layout assertion, and the panel    *
+     * would not contribute to content size for scrolling.                  */
+    ImGui::Dummy(ImVec2(0.0f, 0.0f));
 
     if (indent > 0.0f) ImGui::Unindent(indent);
 }
