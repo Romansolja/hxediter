@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.14)
-project(hxediter CXX)
+project(hxediter
+    VERSION 0.1.0
+    DESCRIPTION "A hex editor built with Dear ImGui"
+    HOMEPAGE_URL "https://github.com/Romansolja/hxediter"
+    LANGUAGES CXX
+)
+
+set(PROJECT_LICENSE "MIT")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -96,3 +103,10 @@ target_link_libraries(hxediter PRIVATE imgui glfw OpenGL::GL)
 # "assets/fonts/..." used by the font loader resolves regardless of the
 # working directory CLion's Run Configuration chooses.
 file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_BINARY_DIR})
+
+# ---------------------------------------------------------------------------
+# Install rules
+# ---------------------------------------------------------------------------
+install(TARGETS hxediter RUNTIME DESTINATION bin)
+install(DIRECTORY assets/ DESTINATION share/hxediter/assets)
+install(FILES LICENSE.txt DESTINATION share/hxediter)
