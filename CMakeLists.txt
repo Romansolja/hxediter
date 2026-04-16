@@ -75,6 +75,14 @@ add_executable(hxediter
     src/hex_editor_core.cpp
     src/fileops.cpp
     src/undo.cpp
+    src/ui/theme.cpp
+    src/ui/gui_state.cpp
+    src/ui/actions.cpp
+    src/ui/toolbar.cpp
+    src/ui/hex_grid.cpp
+    src/ui/status_bar.cpp
+    src/ui/start_screen.cpp
+    src/ui/help_panel.cpp
     ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
