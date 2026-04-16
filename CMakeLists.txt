@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(hxediter
-    VERSION 0.1.0
+    VERSION 4.0.0
     DESCRIPTION "A hex editor built with Dear ImGui"
     HOMEPAGE_URL "https://github.com/Romansolja/hxediter"
     LANGUAGES CXX
@@ -99,6 +99,15 @@ target_include_directories(hxediter PRIVATE
 )
 target_link_libraries(hxediter PRIVATE imgui glfw OpenGL::GL)
 
+# ---------------------------------------------------------------------------
+# Static-link the MinGW C++ runtime so the binary is self-contained.
+# Without this, the exe depends on libstdc++-6.dll, libgcc_s_seh-1.dll,
+# and libwinpthread-1.dll which are only present in the MinGW toolchain.
+# ---------------------------------------------------------------------------
+if(MINGW)
+    target_link_options(hxediter PRIVATE -static -mwindows)
+endif()
+
 # Stage runtime assets (fonts) next to the binary so the relative path
 # "assets/fonts/..." used by the font loader resolves regardless of the
 # working directory CLion's Run Configuration chooses.
@@ -107,6 +116,46 @@ file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_BINARY_DIR})
 # ---------------------------------------------------------------------------
 # Install rules
 # ---------------------------------------------------------------------------
-install(TARGETS hxediter RUNTIME DESTINATION bin)
-install(DIRECTORY assets/ DESTINATION share/hxediter/assets)
-install(FILES LICENSE.txt DESTINATION share/hxediter)
+install(TARGETS hxediter RUNTIME DESTINATION .)
+install(DIRECTORY assets DESTINATION .)
+install(FILES LICENSE.txt DESTINATION .)
+
+# ---------------------------------------------------------------------------
+# CPack / NSIS installer
+# ---------------------------------------------------------------------------
+set(CPACK_PACKAGE_NAME "HxEditer")
+set(CPACK_PACKAGE_VENDOR "Romansolja")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A hex editor built with Dear ImGui")
+set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "HxEditer")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE.txt")
+
+set(CPACK_GENERATOR "NSIS")
+set(CPACK_NSIS_DISPLAY_NAME "HxEditer")
+set(CPACK_NSIS_PACKAGE_NAME "HxEditer")
+set(CPACK_NSIS_INSTALL_ROOT "$PROGRAMFILES64")
+set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+set(CPACK_NSIS_MODIFY_PATH OFF)
+set(CPACK_NSIS_HELP_LINK "https://github.com/Romansolja/hxediter")
+set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/Romansolja/hxediter")
+set(CPACK_NSIS_INSTALLED_ICON_NAME "hxediter.exe")
+
+# Start Menu shortcut
+set(CPACK_NSIS_CREATE_ICONS_EXTRA
+    "CreateShortCut '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\HxEditer.lnk' '$INSTDIR\\\\hxediter.exe'"
+)
+set(CPACK_NSIS_DELETE_ICONS_EXTRA
+    "Delete '$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\HxEditer.lnk'"
+)
+
+# Desktop shortcut
+set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
+    "CreateShortCut '$DESKTOP\\\\HxEditer.lnk' '$INSTDIR\\\\hxediter.exe'"
+)
+set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
+    "Delete '$DESKTOP\\\\HxEditer.lnk'"
+)
+
+include(CPack)
