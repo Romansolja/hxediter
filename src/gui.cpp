@@ -21,8 +21,9 @@
 
 #include "imgui.h"
 
-#include <cstdio>
+#include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace {
@@ -228,6 +229,21 @@ void RenderHexEditorUI(AppState state,
      * state back to StartScreen before this function runs). */
     HexEditorCore& core_ref = *core;
 
+    /* Poll the file mtime/size baseline. Once we notice drift we latch
+     * the flag until the user resolves it; we don't clear it on our own,
+     * because the baseline would immediately rebase if we called reload
+     * without confirmation. Cheap: a single _stat64 per frame on local FS.
+     *
+     * The transient warning is sticky so the user doesn't miss it if they
+     * happen to be looking at a different part of the screen when the
+     * external write lands. They dismiss it by clicking the 'x' next to
+     * the badge; the separate red EXTERNALLY MODIFIED indicator stays up
+     * until the edit/undo conflict modal actually resolves the state. */
+    if (!s.externally_modified && core_ref.HasExternalModification()) {
+        s.externally_modified = true;
+        s.SetStatus("File changed on disk", ui::GuiState::STATUS_WARN, true);
+    }
+
     if (s.ui_font) ImGui::PushFont(s.ui_font);
     ui::RenderToolbar(s, pal, core_ref);
     if (s.ui_font) ImGui::PopFont();
@@ -267,6 +283,80 @@ void RenderHexEditorUI(AppState state,
     if (s.ui_font) ImGui::PushFont(s.ui_font);
     ui::RenderStatusBar(s, pal, core_ref);
     if (s.ui_font) ImGui::PopFont();
+
+    /* --- External-modification resolution modal ---
+     *
+     * Opens when either (a) the user tried to commit an edit while the
+     * externally_modified flag was set, or (b) they clicked the red
+     * "EXTERNALLY MODIFIED" badge in the status bar. Three exits:
+     *
+     *   Reload from disk — core.ReloadFromDisk(): refresh size, drop
+     *                      undo stack, rebase baseline, discard any
+     *                      pending edit. Safest option; it's the
+     *                      default focused button.
+     *   Keep my edits    — clears the flag and commits the pending edit
+     *                      (if any). "Overwrite anyway" semantics.
+     *   Cancel           — closes the modal, leaves the flag set,
+     *                      discards the pending edit. User can keep
+     *                      browsing; the next edit will re-trigger.
+     */
+    if (s.conflict_modal_open) {
+        ImGui::OpenPopup("File changed on disk##conflict");
+        s.conflict_modal_open = false;  /* one-shot trigger */
+    }
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("File changed on disk##conflict",
+                               nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize |
+                               ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::TextWrapped(
+            "Another program has written to this file since hxediter "
+            "opened it. Undo history may no longer line up with what's "
+            "on disk.");
+        ImGui::Spacing();
+        ImGui::TextWrapped("What would you like to do?");
+        ImGui::Spacing();
+
+        if (ImGui::Button("Reload from disk", ImVec2(160, 0))) {
+            if (core_ref.ReloadFromDisk()) {
+                s.externally_modified    = false;
+                s.pending_edit_offset    = -1;
+                s.SetStatus("Reloaded from disk", ui::GuiState::STATUS_OK);
+            } else {
+                s.SetStatus("Reload failed", ui::GuiState::STATUS_ERROR);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+        if (ImGui::Button("Keep my edits", ImVec2(140, 0))) {
+            s.externally_modified = false;
+            if (s.pending_edit_offset >= 0) {
+                auto res = core_ref.EditByte(s.pending_edit_offset,
+                                             s.pending_edit_value);
+                if (res) {
+                    char buf[80];
+                    std::snprintf(buf, sizeof(buf),
+                        "Edited 0x%" PRIX64 ": 0x%02X -> 0x%02X",
+                        (uint64_t)res->offset, res->old_val, res->new_val);
+                    s.SetStatus(buf, ui::GuiState::STATUS_OK);
+                } else {
+                    s.SetStatus("Edit failed (read-only?)",
+                                ui::GuiState::STATUS_ERROR);
+                }
+                s.pending_edit_offset = -1;
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(100, 0))) {
+            s.pending_edit_offset = -1;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
 
     HandleShortcuts(s, core_ref);
 

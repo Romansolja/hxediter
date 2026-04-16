@@ -217,12 +217,11 @@ int main(int argc, char* argv[]) {
         glfwPollEvents();
 
         /* ---- Consume any pending file drop / dialog result ----
-         * The old core is reset *before* constructing the new one. On
-         * Windows, fopen("rb+") opens the file with write-share denied,
-         * so reopening the same path while the old handle is still alive
-         * fails with a sharing violation. The trade-off: a failed load
-         * also closes the previously-open file. The user can re-drop it
-         * from the start screen.
+         * The old core is reset *before* constructing the new one so the
+         * previous file handle is closed before the new HexEditorCore's
+         * is_file_held_by_other_process probe runs. The trade-off: a
+         * failed load also closes the previously-open file. The user can
+         * re-drop it from the start screen.
          *
          * pending_path is set by (a) the GLFW drop callback or (b) the
          * Select File button on the start screen writing the ImGuiFileDialog

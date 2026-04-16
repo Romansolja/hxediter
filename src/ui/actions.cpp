@@ -87,6 +87,13 @@ void DoSearch(GuiState& s, HexEditorCore& core) {
 }
 
 void DoUndo(GuiState& s, HexEditorCore& core) {
+    /* An external writer may have touched the same offset since the
+     * undo entry was recorded. Restoring our old_val would clobber
+     * the external change with stale data. Gate through the modal. */
+    if (s.externally_modified) {
+        s.conflict_modal_open = true;
+        return;
+    }
     auto res = core.Undo();
     if (!res) {
         s.SetStatus("Nothing to undo", GuiState::STATUS_WARN);
@@ -111,6 +118,18 @@ void CommitEdit(GuiState& s, HexEditorCore& core) {
         s.selected_byte = -1;
         return;
     }
+
+    /* Conflict gate: if the file changed on disk since we opened it, we
+     * refuse to blind-overwrite. Stash the pending edit and pop the
+     * resolution modal; the user picks Reload / Keep-mine / Cancel. */
+    if (s.externally_modified) {
+        s.pending_edit_offset = s.selected_byte;
+        s.pending_edit_value  = (unsigned char)v;
+        s.conflict_modal_open = true;
+        s.selected_byte = -1;
+        return;
+    }
+
     auto res = core.EditByte(s.selected_byte, (unsigned char)v);
     if (!res) {
         s.SetStatus("Edit failed (read-only?)", GuiState::STATUS_ERROR);

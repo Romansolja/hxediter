@@ -77,6 +77,16 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         Badge("CLEAN", pal.status_ok_bg, pal.status_ok_fg);
     }
 
+    /* External-modification indicator — red, always shown once tripped
+     * so the user can't miss that they're editing a file another program
+     * has also changed. The resolution modal opens on the next edit or
+     * undo attempt; the badge itself is not clickable because the Badge
+     * renderer uses a non-interactive Dummy for its footprint. */
+    if (s.externally_modified) {
+        ImGui::SameLine(0, 6);
+        Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg);
+    }
+
     /* Help marker explaining the three mode/state badges. */
     ImGui::SameLine(0, 6);
     ImGui::TextDisabled("(?)");
@@ -104,7 +114,10 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         ImGui::EndTooltip();
     }
 
-    /* Transient status badge (last action / error). */
+    /* Transient status badge (last action / error). Sticky messages pin
+     * until the user clicks the adjacent 'x' button — used for warnings
+     * the user needs to explicitly acknowledge (e.g. "File changed on
+     * disk"). Non-sticky messages fade out on a timer as before. */
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -113,14 +126,27 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
             case GuiState::STATUS_ERROR: bg = pal.status_err_bg;     fg = pal.status_err_fg;     break;
             default:                     bg = pal.status_neutral_bg; fg = pal.status_neutral_fg; break;
         }
-        const float fade_window = 0.5f;
-        float alpha_raw = s.status_timer / fade_window;
-        if (alpha_raw < 0.0f) alpha_raw = 0.0f;
-        if (alpha_raw > 1.0f) alpha_raw = 1.0f;
-        float alpha = (s.status_timer >= fade_window) ? 1.0f : alpha_raw;
+        float alpha = 1.0f;
+        if (!s.status_sticky) {
+            const float fade_window = 0.5f;
+            float alpha_raw = s.status_timer / fade_window;
+            if (alpha_raw < 0.0f) alpha_raw = 0.0f;
+            if (alpha_raw > 1.0f) alpha_raw = 1.0f;
+            alpha = (s.status_timer >= fade_window) ? 1.0f : alpha_raw;
+        }
         ImGui::SameLine(0, 14);
         Badge(s.status_msg.c_str(), bg, fg, alpha);
-        s.status_timer -= ImGui::GetIO().DeltaTime;
+
+        if (s.status_sticky) {
+            ImGui::SameLine(0, 4);
+            if (ImGui::SmallButton("x##dismiss_status")) {
+                s.status_msg.clear();
+                s.status_timer  = 0.0f;
+                s.status_sticky = false;
+            }
+        } else {
+            s.status_timer -= ImGui::GetIO().DeltaTime;
+        }
     }
 
     /* Contextual hint, dim, end-of-line. */
