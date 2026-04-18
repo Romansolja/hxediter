@@ -30,23 +30,25 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
             ImGui::TextUnformatted("Not checked yet.");
             break;
         case updater::CheckState::InProgress:
-            ImGui::TextUnformatted("Checking GitHub for updates...");
+            ImGui::TextUnformatted("Checking GitHub...");
             break;
         case updater::CheckState::UpToDate:
-            ImGui::Text("You're on the latest version (%s).", snap.latest_version.c_str());
+            ImGui::Text("On latest (%s).", snap.latest_version.c_str());
             break;
         case updater::CheckState::UpdateAvailable:
-            ImGui::TextDisabled("Latest version:");
+            ImGui::TextDisabled("Latest:");
             ImGui::SameLine();
-            ImGui::Text("%s  (update available)", snap.latest_version.c_str());
+            ImGui::Text("%s", snap.latest_version.c_str());
             break;
         case updater::CheckState::NetworkError:
-            ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.5f, 1.0f),
-                "Could not check: %s", snap.error_message.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
+            ImGui::TextWrapped("Could not check: %s", snap.error_message.c_str());
+            ImGui::PopStyleColor();
             break;
         case updater::CheckState::ParseError:
-            ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.5f, 1.0f),
-                "Unexpected response from GitHub: %s", snap.error_message.c_str());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
+            ImGui::TextWrapped("Bad response: %s", snap.error_message.c_str());
+            ImGui::PopStyleColor();
             break;
     }
 
@@ -57,29 +59,22 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
     const bool download_done = (snap.download == updater::DownloadState::Complete);
     const bool busy        = checking || downloading;
 
-    /* Check-now button — always available unless already checking. */
-    if (ImGui::Button("Check for updates", ImVec2(180, 0))) {
+    if (ImGui::Button("Check for updates", ImVec2(-FLT_MIN, 0))) {
         if (!busy) updater::StartCheck();
-    }
-    if (checking) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("...");
     }
 
     if (snap.check == updater::CheckState::UpdateAvailable && !download_done) {
-        ImGui::SameLine();
         if (downloading) {
             ImGui::BeginDisabled();
-            ImGui::Button("Downloading...", ImVec2(180, 0));
+            ImGui::Button("Downloading...", ImVec2(-FLT_MIN, 0));
             ImGui::EndDisabled();
         } else {
-            if (ImGui::Button("Install and restart", ImVec2(180, 0))) {
+            if (ImGui::Button("Install and restart", ImVec2(-FLT_MIN, 0))) {
                 updater::StartDownload();
             }
         }
     }
 
-    /* Download progress and errors. */
     if (downloading) {
         ImGui::Spacing();
         float frac = 0.0f;
@@ -97,11 +92,12 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
             std::snprintf(label, sizeof(label), "%.1f MB",
                 snap.bytes_received / (1024.0 * 1024.0));
         }
-        ImGui::ProgressBar(frac, ImVec2(370, 0), label);
+        ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), label);
     } else if (snap.download == updater::DownloadState::Failed) {
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.9f, 0.5f, 0.5f, 1.0f),
-            "%s", snap.error_message.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
+        ImGui::TextWrapped("%s", snap.error_message.c_str());
+        ImGui::PopStyleColor();
     }
 
     /* Download finished and verified — write the path back for the main
@@ -115,23 +111,36 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
 } /* anonymous namespace */
 
 void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    /* Pin a min width so content inside the animated BeginChild doesn't
-     * clip. AlwaysAutoResize alone can't resolve this because the child's
-     * width is derived from the popup's width, which is derived from
-     * content width — chicken-and-egg. A floor breaks the cycle. */
-    ImGui::SetNextWindowSizeConstraints(ImVec2(420.0f, 0.0f),
-                                        ImVec2(FLT_MAX, FLT_MAX));
+    /* Frameless floating tray pinned to the top-right, just below the
+     * toolbar row where the gear icon lives. BeginPopup (non-modal) means
+     * no backdrop dim and auto-close on any outside click — the rest of
+     * the editor stays fully interactive while the panel is open. */
+    constexpr float kPanelW   = 260.0f;
+    constexpr float kTopPad   = 34.0f;   /* clears toolbar + separator */
+    constexpr float kRightPad = 8.0f;    /* matches gear button inset */
 
-    if (!ImGui::BeginPopupModal("Settings##settings", nullptr,
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImVec2 anchor(vp->Pos.x + vp->Size.x - kPanelW - kRightPad,
+                  vp->Pos.y + kTopPad);
+    ImGui::SetNextWindowPos(anchor, ImGuiCond_Always);
+    /* Width locked at kPanelW; height auto-grows with the Updates accordion.
+     * Locking both min and max width breaks the AlwaysAutoResize chicken-
+     * and-egg with the child BeginChild (whose width is derived from the
+     * window's). */
+    ImGui::SetNextWindowSizeConstraints(ImVec2(kPanelW, 0.0f),
+                                        ImVec2(kPanelW, FLT_MAX));
+
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+
+    if (!ImGui::BeginPopup("Settings##settings",
             ImGuiWindowFlags_AlwaysAutoResize |
-            ImGuiWindowFlags_NoSavedSettings)) {
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoMove)) {
+        ImGui::PopStyleVar(2);
         return;
     }
 
-    /* Distinct font for the Settings panel — monospaced leans into the
-     * hex-editor aesthetic. Falls back to default if mono isn't loaded. */
     if (s.mono_font) ImGui::PushFont(s.mono_font);
 
     /* Animated "Updates" section. Starts collapsed; state persists across
@@ -149,8 +158,6 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
     updates_anim += (target - updates_anim) * (1.0f - std::pow(0.1f, dt * rate));
     if (std::fabs(updates_anim - target) < 0.002f) updates_anim = target;
 
-    /* Header button: full-width, centered label, no triangle (it's a
-     * plain Button, not a CollapsingHeader). */
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
     if (ImGui::Button("Updates##header", ImVec2(-FLT_MIN, 0))) {
         updates_open = !updates_open;
@@ -169,9 +176,9 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
                           ImGuiWindowFlags_NoScrollbar |
                           ImGuiWindowFlags_NoScrollWithMouse);
         const float start_y = ImGui::GetCursorPosY();
-        ImGui::Indent(6.0f);
+        ImGui::Indent(4.0f);
         RenderUpdatesSection(s, out_installer_to_launch);
-        ImGui::Unindent(6.0f);
+        ImGui::Unindent(4.0f);
         const float end_y = ImGui::GetCursorPosY();
         if (updates_anim > 0.98f) {
             content_h = (end_y - start_y) + 6.0f;
@@ -181,16 +188,9 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
         ImGui::PopStyleVar();
     }
 
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
-    if (ImGui::Button("Close", ImVec2(120, 0))) {
-        ImGui::CloseCurrentPopup();
-    }
-
     if (s.mono_font) ImGui::PopFont();
     ImGui::EndPopup();
+    ImGui::PopStyleVar(2);
 }
 
 } /* namespace ui */

@@ -29,12 +29,17 @@ static float ComputeHexRowWidth(float offset_w, float char_w, float byte_w,
     return ascii_x + char_w * (bytes_per_line + 1);
 }
 
-HexLayout ComputeHexLayout(float avail_w) {
+HexLayout ComputeHexLayout(float avail_w, float scale) {
     HexLayout L;
     L.bytes_per_line = 16;
-    L.char_w   = ImGui::CalcTextSize("0").x;
-    L.byte_w   = ImGui::CalcTextSize("FF").x;
-    L.offset_w = ImGui::CalcTextSize("00000000").x;
+    /* CalcTextSize returns unscaled metrics (the outer window holds
+     * FontWindowScale=1). Multiplying by `scale` here gives the widths
+     * that `SetWindowFontScale(scale)` will actually render inside the
+     * grid child — so both the bytes-per-line decision and the x-column
+     * table reflect the final on-screen size. */
+    L.char_w   = ImGui::CalcTextSize("0").x * scale;
+    L.byte_w   = ImGui::CalcTextSize("FF").x * scale;
+    L.offset_w = ImGui::CalcTextSize("00000000").x * scale;
 
     /* Snap to multiples of 4 when possible. */
     int best = 1;

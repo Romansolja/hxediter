@@ -22,9 +22,12 @@ void SetStartupDuration(float duration_ms);
  * Select File button's result, consumed by the main loop like a GLFW drop.
  * out_installer_to_launch receives the path of a verified update installer
  * when the user clicks "Install and restart" in Settings; the main loop
- * hands off to updater-helper.exe and shuts down. */
+ * hands off to updater-helper.exe and shuts down. drag_over_state encodes
+ * the OS drag-hover state (0=none, 1=valid file, 2=rejected e.g. folder);
+ * only meaningful on the start screen. */
 void RenderHexEditorUI(AppState state,
                        HexEditorCore* core,
                        const char* load_error,
                        std::string* out_pending_path,
-                       std::string* out_installer_to_launch);
+                       std::string* out_installer_to_launch,
+                       int drag_over_state);

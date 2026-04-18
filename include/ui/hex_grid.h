@@ -20,7 +20,10 @@ struct HexLayout {
     float row_total_w;
 };
 
-HexLayout ComputeHexLayout(float avail_w);
+/* `scale` multiplies the current font's metrics — use this to derive a
+ * layout that matches what `SetWindowFontScale(scale)` will render inside
+ * the grid's child window. Passing 1.0f preserves legacy behavior. */
+HexLayout ComputeHexLayout(float avail_w, float scale = 1.0f);
 
 void RenderHexHeader(const theme::Palette& pal, const HexLayout& L);
 void RenderHexGrid  (GuiState& s, const theme::Palette& pal,

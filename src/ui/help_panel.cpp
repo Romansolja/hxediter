@@ -35,6 +35,7 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         "  PgUp / PgDn          Previous / next page",
         "  Ctrl+Z               Undo last edit",
         "  Ctrl+= / Ctrl+-      Scale font up / down",
+        "  Ctrl+wheel           Scale font (mouse)",
         "  Ctrl+0               Reset font scale",
         "  Ctrl+Shift+P         Cycle color palette",
         "  F1                   Toggle this panel",

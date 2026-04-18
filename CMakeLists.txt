@@ -89,7 +89,7 @@ find_package(OpenGL REQUIRED)
 # ---------------------------------------------------------------------------
 # hxediter executable
 # ---------------------------------------------------------------------------
-add_executable(hxediter
+set(HXEDITER_SOURCES
     src/main.cpp
     src/gui.cpp
     src/hex_editor_core.cpp
@@ -108,6 +108,12 @@ add_executable(hxediter
     ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
+if(WIN32)
+    list(APPEND HXEDITER_SOURCES src/win_drop_target.cpp)
+endif()
+
+add_executable(hxediter ${HXEDITER_SOURCES})
+
 target_include_directories(hxediter PRIVATE
     include
     ${imguifiledialog_SOURCE_DIR}
@@ -115,7 +121,7 @@ target_include_directories(hxediter PRIVATE
 target_link_libraries(hxediter PRIVATE
     imgui glfw OpenGL::GL
     nlohmann_json::nlohmann_json
-    winhttp bcrypt
+    winhttp bcrypt ole32 shell32
 )
 
 target_compile_definitions(hxediter PRIVATE APP_VERSION="${PROJECT_VERSION}")

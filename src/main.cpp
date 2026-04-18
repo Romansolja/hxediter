@@ -15,6 +15,10 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #  include <shellapi.h>
+#  include <ole2.h>
+#  define GLFW_EXPOSE_NATIVE_WIN32
+#  include <GLFW/glfw3native.h>
+#  include "win_drop_target.h"
 #endif
 
 #include <chrono>
@@ -76,6 +80,11 @@ struct AppContext {
     /* Empty unless the Settings popup has approved an update: absolute path
      * to a downloaded-and-SHA-verified NSIS installer in %TEMP%. */
     std::string installer_to_launch;
+#ifdef _WIN32
+    /* Flipped by our IDropTarget; read by the render loop each frame to
+     * decide whether to draw the drop-zone overlay. */
+    platform::DragState drag_over = platform::DragState::None;
+#endif
 };
 
 #ifdef _WIN32
@@ -188,6 +197,20 @@ int main(int argc, char* argv[]) {
     glfwSetDropCallback(window, glfw_drop_callback);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+
+#ifdef _WIN32
+    /* Replace GLFW's internal IDropTarget with ours so we get DragEnter /
+     * DragOver / DragLeave in addition to Drop. The custom target writes
+     * ctx.pending_path on drop, mirroring glfw_drop_callback's behavior,
+     * so the main loop's consumer is unchanged. OleInitialize is
+     * refcounted; safe even though GLFW already called it. */
+    HWND hwnd = glfwGetWin32Window(window);
+    OleInitialize(nullptr);
+    RevokeDragDrop(hwnd);
+    platform::WinDropTarget* drop_target =
+        new platform::WinDropTarget(&ctx.drag_over, &ctx.pending_path);
+    RegisterDragDrop(hwnd, drop_target);
+#endif
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -312,8 +335,14 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+#ifdef _WIN32
+        int drag_over_state = static_cast<int>(ctx.drag_over);
+#else
+        int drag_over_state = 0;
+#endif
         RenderHexEditorUI(ctx.state, ctx.core.get(), ctx.load_error.c_str(),
-                          &ctx.pending_path, &ctx.installer_to_launch);
+                          &ctx.pending_path, &ctx.installer_to_launch,
+                          drag_over_state);
 
 #ifdef _WIN32
         /* Settings popup has written a verified installer path here. Spawn
@@ -357,6 +386,12 @@ int main(int argc, char* argv[]) {
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
+
+#ifdef _WIN32
+    RevokeDragDrop(hwnd);
+    drop_target->Release();
+    OleUninitialize();
+#endif
 
     glfwDestroyWindow(window);
     glfwTerminate();

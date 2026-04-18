@@ -79,12 +79,31 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
     PopBtn();
 
     ImGui::SameLine(0.0f, group_gap);
-    PushSecondary();
-    if (ImGui::Button(s.show_help ? "Hide ?" : "?")) {
+    /* Glyph is always "?"; when the quick reference is up, paint the
+     * resting state with the hover tint so the button reads as "pressed"
+     * without a distinct label. Dismissing the panel returns it to the
+     * normal secondary style. */
+    if (s.show_help) {
+        ImGui::PushStyleColor(ImGuiCol_Button,        pal.btn_secondary_hover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.btn_secondary_active);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  pal.btn_secondary_active);
+    } else {
+        PushSecondary();
+    }
+    if (ImGui::Button("?##quickref")) {
         s.show_help = !s.show_help;
     }
     PopBtn();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle quick reference (F1)");
+    if (ImGui::IsItemHovered()) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+        ImGui::BeginTooltip();
+        if (s.mono_font) ImGui::PushFont(s.mono_font);
+        ImGui::TextUnformatted("Toggle quick reference (F1)");
+        if (s.mono_font) ImGui::PopFont();
+        ImGui::EndTooltip();
+        ImGui::PopStyleVar(2);
+    }
 
     /* Gear/Settings button pinned to the far right. Drawn manually via
      * InvisibleButton + DrawList so the glyph is pixel-centered — the
@@ -102,10 +121,15 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
 
     if (have_icon) {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
+        /* Sample popup state before the click is processed — if the
+         * non-modal popup is open, BeginPopup's click-outside handling
+         * will close it this frame, so swallow the reopen to keep the
+         * gear feeling like a proper toggle instead of a flicker. */
+        const bool popup_open = ImGui::IsPopupOpen("Settings##settings");
         const bool clicked = ImGui::InvisibleButton("##settings", ImVec2(size, size));
         const bool hovered = ImGui::IsItemHovered();
         const bool active  = ImGui::IsItemActive();
-        if (clicked) s.show_settings = true;
+        if (clicked && !popup_open) s.show_settings = true;
 
         /* JetBrains-IDE feel: no background at rest — the gear floats on
          * the toolbar like an icon, not a button. A subtle white-alpha
@@ -131,14 +155,38 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
         dl->AddText(tp, glyph, ICON_FA_GEAR);
         ImGui::PopFont();
 
-        if (hovered) ImGui::SetTooltip("Settings");
+        if (hovered) {
+            /* Mirror the Settings popup's frame: rounded corners and the
+             * mono font. SetTooltip would render with the default frame
+             * style, which visually disagrees with the panel it launches. */
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+            ImGui::BeginTooltip();
+            if (s.mono_font) ImGui::PushFont(s.mono_font);
+            ImGui::TextUnformatted("Settings");
+            if (s.mono_font) ImGui::PopFont();
+            ImGui::EndTooltip();
+            ImGui::PopStyleVar(2);
+        }
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32( 44,  98, 122, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32( 62, 132, 158, 255));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32( 32,  72,  94, 255));
-        if (ImGui::Button("Settings##settings")) s.show_settings = true;
+        const bool popup_open = ImGui::IsPopupOpen("Settings##settings");
+        if (ImGui::Button("Settings##settings") && !popup_open) {
+            s.show_settings = true;
+        }
         ImGui::PopStyleColor(3);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings");
+        if (ImGui::IsItemHovered()) {
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
+            ImGui::BeginTooltip();
+            if (s.mono_font) ImGui::PushFont(s.mono_font);
+            ImGui::TextUnformatted("Settings");
+            if (s.mono_font) ImGui::PopFont();
+            ImGui::EndTooltip();
+            ImGui::PopStyleVar(2);
+        }
     }
 }
 

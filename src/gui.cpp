@@ -57,6 +57,16 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
         s.show_help = false;
     }
 
+    /* Ctrl + mouse wheel zooms the hex grid (Notepad-style). Runs before
+     * the WantTextInput gate — wheel is a mouse gesture and shouldn't be
+     * swallowed just because the Goto/Search field has focus. Consuming
+     * io.MouseWheel stops the same tick from also scrolling a child. */
+    if (io.KeyCtrl && io.MouseWheel != 0.0f) {
+        AdjustFontScale(s, (io.MouseWheel > 0.0f ? +1.0f : -1.0f)
+                              * ui::layout::kFontScaleStep);
+        io.MouseWheel = 0.0f;
+    }
+
     if (io.WantTextInput) return;
 
     const bool ctrl  = io.KeyCtrl;
@@ -155,10 +165,15 @@ void RenderHexEditorUI(AppState state,
                        HexEditorCore* core,
                        const char* load_error,
                        std::string* out_pending_path,
-                       std::string* out_installer_to_launch) {
+                       std::string* out_installer_to_launch,
+                       int drag_over_state) {
     auto& s = g_state;
 
-    ImGui::GetIO().FontGlobalScale = s.font_scale;
+    /* Notepad-style zoom: Ctrl+= / Ctrl+- scale only the hex grid, not
+     * the toolbar / settings / status / tooltips. Scaling is applied per
+     * child window below via SetWindowFontScale; FontGlobalScale stays
+     * at 1.0 so UI chrome holds its size. */
+    ImGui::GetIO().FontGlobalScale = 1.0f;
 
     float dt = ImGui::GetIO().DeltaTime;
     float t  = dt * ui::layout::kHelpAnimSpeed;
@@ -191,7 +206,8 @@ void RenderHexEditorUI(AppState state,
                                            : ui::GuiState::FOCUS_NONE;
 
     if (state == AppState::StartScreen) {
-        ui::RenderStartScreen(s, pal, load_error, out_pending_path);
+        ui::RenderStartScreen(s, pal, load_error, out_pending_path,
+                              drag_over_state);
         ui::theme::PopEditorStyle();
         ImGui::End();
         return;
@@ -216,17 +232,24 @@ void RenderHexEditorUI(AppState state,
     ImGui::Separator();
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
-    ui::HexLayout layout = ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x);
+    ui::HexLayout layout =
+        ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x, s.font_scale);
 
     /* Header and body MUST share the same window.Pos.x — the
      * SameLine(absolute_x) calls inside both renderers land on different
      * pixels otherwise and the byte columns drift out from under the
-     * header labels. Zero WindowPadding keeps them aligned. */
+     * header labels. Zero WindowPadding keeps them aligned.
+     *
+     * SetWindowFontScale is applied to each child so only the hex content
+     * zooms; the toolbar/status rendered outside these children stay at
+     * 100%. Must be set inside the child window (it's per-window state),
+     * so it goes between BeginChild and the renderer call. */
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexheader",
                       ImVec2(0, 0),
                       ImGuiChildFlags_AutoResizeY,
                       ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetWindowFontScale(s.font_scale);
     ImGui::PopStyleVar();
     ui::RenderHexHeader(pal, layout);
     ImGui::EndChild();
@@ -236,6 +259,7 @@ void RenderHexEditorUI(AppState state,
                       ImVec2(0, -ImGui::GetFrameHeightWithSpacing()),
                       false,
                       ImGuiWindowFlags_None);
+    ImGui::SetWindowFontScale(s.font_scale);
     ImGui::PopStyleVar();
     ui::RenderHexGrid(s, pal, core_ref, layout);
     ImGui::EndChild();

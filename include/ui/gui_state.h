@@ -38,6 +38,10 @@ struct GuiState {
     bool  user_interacted = false;
     float help_anim       = 1.0f;
 
+    /* Lerped toward 1 while an OS drag is hovering the start screen; 0
+     * otherwise. Drives the drop-zone overlay fade. */
+    float drag_overlay_anim = 0.0f;
+
     /* Set by the toolbar gear button; consumed by the popup trigger in
      * RenderHexEditorUI. Mirrors the conflict_modal_open one-shot pattern. */
     bool show_settings = false;
