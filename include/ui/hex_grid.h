@@ -1,5 +1,3 @@
-/* hex_grid.h — Responsive hex byte grid (layout, header, body). */
-
 #pragma once
 
 #include "hex_editor_core.h"
@@ -10,9 +8,8 @@
 
 namespace ui {
 
-/* Precomputed column x-coordinates so the header strip and body rows
- * land on the exact same pixels. All values are relative to the line
- * start in the current ImGui window. */
+/* Precomputed column x-coordinates shared by the header strip and body
+ * so both land on the exact same pixels. */
 struct HexLayout {
     int   bytes_per_line;
     float char_w;

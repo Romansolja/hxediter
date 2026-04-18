@@ -1,5 +1,3 @@
-/* actions.h — Hex parsing helpers and editor command handlers. */
-
 #pragma once
 
 #include "hex_editor_core.h"

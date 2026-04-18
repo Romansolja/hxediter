@@ -1,10 +1,7 @@
-/* platform.h — Shared macros, constants, and types for hxediter */
-
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
-/* Ensure 64-bit file offsets on POSIX systems.
- * MUST be defined before any system header is included. */
+/* MUST be defined before any system header is included. */
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
 #endif
@@ -27,7 +24,7 @@
 
 #define BYTES_PER_LINE 16
 #define LINES_PER_PAGE 16
-#define PAGE_SIZE (BYTES_PER_LINE * LINES_PER_PAGE)  /* 256 bytes per page */
+#define PAGE_SIZE (BYTES_PER_LINE * LINES_PER_PAGE)
 #define MAX_SEARCH_BYTES 16
 #define INPUT_BUF_SIZE 128
 #define UNDO_MAX 64
@@ -39,4 +36,4 @@ typedef struct {
     unsigned char new_val;
 } UndoEntry;
 
-#endif /* PLATFORM_H */
+#endif

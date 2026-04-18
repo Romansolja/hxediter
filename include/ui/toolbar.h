@@ -1,5 +1,3 @@
-/* toolbar.h — Editor toolbar (nav, jump, search/edit groups). */
-
 #pragma once
 
 #include "hex_editor_core.h"

@@ -1,9 +1,6 @@
-/* undo.c — Undo ring buffer operations */
-
 #include "undo.h"
 
-/* Push an edit onto the undo ring buffer.
- * If the buffer is full, the oldest entry is silently overwritten. */
+/* Oldest entry is silently overwritten when the ring is full. */
 void undo_push(EditorState *state, int64_t offset,
                unsigned char old_val, unsigned char new_val)
 {
@@ -15,8 +12,6 @@ void undo_push(EditorState *state, int64_t offset,
         state->undo_count++;
 }
 
-/* Pop the most recent edit from the undo ring buffer.
- * Returns 1 on success (entry written to *out), 0 if nothing to undo. */
 int undo_pop(EditorState *state, UndoEntry *out)
 {
     if (state->undo_count == 0)
@@ -28,8 +23,8 @@ int undo_pop(EditorState *state, UndoEntry *out)
     return 1;
 }
 
-/* Roll back a pop that could not be completed (e.g. write failure).
- * Must be called immediately after a failed undo_pop recovery. */
+/* Roll back a pop that couldn't complete (e.g. write failure).
+ * Must be called immediately after the failed undo_pop. */
 void undo_unpop(EditorState *state)
 {
     state->undo_head = (state->undo_head + 1) % UNDO_MAX;

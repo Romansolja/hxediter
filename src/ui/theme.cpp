@@ -1,14 +1,8 @@
-/* theme.cpp — Palette definitions and the ImGui style push/pop helpers. */
-
 #include "ui/theme.h"
 #include "ui/layout.h"
 
 namespace ui::theme {
 
-/* ------------------------------------------------------------------ */
-/* kDefault — today's palette, literal-for-literal from the original  */
-/* gui.cpp so PAL_DEFAULT produces pixel-identical output.            */
-/* ------------------------------------------------------------------ */
 const Palette kDefault = {
     /* text             */ ImVec4(0.94f, 0.95f, 0.97f, 1.00f),
     /* text_disabled    */ ImVec4(0.62f, 0.66f, 0.74f, 1.00f),
@@ -66,11 +60,8 @@ const Palette kDefault = {
     /* frame_border_size */ 1.0f,
 };
 
-/* ------------------------------------------------------------------ */
-/* kDeuteranopia — shift red/green axis to blue/orange.               */
-/* Chrome stays the same (neutral gray-blue); only semantic colors    */
-/* (status badges, search hit, bytes, primary buttons) move.          */
-/* ------------------------------------------------------------------ */
+/* Red/green axis shifted to blue/orange. Chrome stays neutral; only
+ * semantic colors (status, search, bytes, primary buttons) move. */
 const Palette kDeuteranopia = {
     /* text             */ ImVec4(0.94f, 0.95f, 0.97f, 1.00f),
     /* text_disabled    */ ImVec4(0.62f, 0.66f, 0.74f, 1.00f),
@@ -128,10 +119,6 @@ const Palette kDeuteranopia = {
     /* frame_border_size */ 1.0f,
 };
 
-/* ------------------------------------------------------------------ */
-/* kHighContrast — boosted luminance, heavier borders, yellow accents */
-/* on the most important UI surfaces.                                  */
-/* ------------------------------------------------------------------ */
 const Palette kHighContrast = {
     /* text             */ ImVec4(1.00f, 1.00f, 1.00f, 1.00f),
     /* text_disabled    */ ImVec4(0.80f, 0.80f, 0.80f, 1.00f),

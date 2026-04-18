@@ -1,5 +1,3 @@
-/* hex_editor_core.cpp — Core hex editor logic implementation */
-
 #include "hex_editor_core.h"
 #include "fileops.h"
 #include "undo.h"
@@ -16,12 +14,9 @@ HexEditorCore::HexEditorCore(const std::string& filename)
             "Close it there first, then try again.");
     }
 
-    /* Probe writability with a throwaway "rb+" handle. If it succeeds we
-     * know edits will work; close the probe immediately so we don't hold
-     * write access while idle. On Windows, holding write access would
-     * make Notepad/VSCode's save fail with a sharing violation even with
-     * _SH_DENYNO, because Windows' share check is symmetric — our held
-     * write access is incompatible with their restrictive share mode. */
+    /* Close the probe handle immediately: Windows' share check is
+     * symmetric, so holding write access here would block external
+     * tools' saves even with _SH_DENYNO. */
     FILE* probe = open_file_shared(state_.filename, "rb+");
     if (probe != nullptr) {
         fclose(probe);
@@ -30,9 +25,7 @@ HexEditorCore::HexEditorCore(const std::string& filename)
         state_.is_readonly = 1;
     }
 
-    /* The long-lived handle is read-only: browsing never blocks external
-     * writers. Byte edits acquire a transient "rb+" handle via
-     * write_byte_at_path and release it immediately. */
+    /* Long-lived handle is read-only; edits use transient write handles. */
     state_.fp = open_file_shared(state_.filename, "rb");
     if (state_.fp == nullptr) {
         throw std::runtime_error("Cannot open '" + filename + "'");
@@ -45,10 +38,8 @@ HexEditorCore::HexEditorCore(const std::string& filename)
         throw std::runtime_error("Cannot determine file size");
     }
 
-    /* Capture the mtime/size baseline. Any future value that differs
-     * (and wasn't caused by our own EditByte call) signals an external
-     * writer. -1 means "couldn't stat" — degrade to "no detection" rather
-     * than failing the open, since the file itself is already readable. */
+    /* -1 means stat failed: degrade to "no detection" rather than
+     * failing the open, since the file itself is readable. */
     baseline_token_ = get_file_mtime_token(state_.filename);
 }
 
@@ -114,7 +105,6 @@ std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char 
     if (offset < 0 || offset >= state_.file_size)
         return std::nullopt;
 
-    /* Read existing byte for undo */
     if (fseek64(state_.fp, offset, SEEK_SET) != 0)
         return std::nullopt;
 
@@ -124,15 +114,13 @@ std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char 
 
     unsigned char old_val = static_cast<unsigned char>(old_ch);
 
-    /* Transient write handle — see constructor comment. */
     if (write_byte_at_path(state_.filename, offset, new_val) != 0)
         return std::nullopt;
 
     undo_push(&state_, offset, old_val, new_val);
     state_.page_offset = (offset / PAGE_SIZE) * PAGE_SIZE;
 
-    /* Re-baseline: our own write just bumped the file's mtime, and we
-     * don't want that to trip HasExternalModification on the next frame. */
+    /* Rebaseline so our own write doesn't trip HasExternalModification. */
     baseline_token_ = get_file_mtime_token(state_.filename);
 
     return EditResult{offset, old_val, new_val};
@@ -165,7 +153,6 @@ std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned cha
                                   state_.page_offset, pattern.data(),
                                   static_cast<int>(pattern.size()));
 
-    /* Wrap around to beginning if not found */
     if (result == -1 && state_.page_offset > 0) {
         result = search_bytes(state_.fp, state_.file_size, 0,
                               pattern.data(), static_cast<int>(pattern.size()));
@@ -210,9 +197,6 @@ int HexEditorCore::GetUndoCount() const
 
 bool HexEditorCore::HasExternalModification() const
 {
-    /* If we never captured a baseline (stat failed at open), we can't
-     * detect drift — return false rather than false-positive on every
-     * frame. */
     if (baseline_token_ == -1) return false;
     int64_t now = get_file_mtime_token(state_.filename);
     if (now == -1) return false;
@@ -223,22 +207,18 @@ bool HexEditorCore::ReloadFromDisk()
 {
     if (state_.fp == nullptr) return false;
 
-    /* Re-stat to refresh file_size: an external writer may have grown or
-     * shrunk the file while we had it open. */
     int64_t new_size = get_file_size(state_.fp);
     if (new_size < 0) return false;
     state_.file_size = new_size;
 
-    /* Clamp the current page offset to the new size so we don't leave
-     * the caret past EOF after a truncation. */
+    /* Clamp page offset so the caret isn't past EOF after a truncation. */
     if (state_.page_offset >= state_.file_size) {
         state_.page_offset = (state_.file_size > 0)
             ? ((state_.file_size - 1) / PAGE_SIZE) * PAGE_SIZE
             : 0;
     }
 
-    /* Drop pending undo — the old offsets may no longer refer to the
-     * bytes the user thinks they do. */
+    /* Drop undo — old offsets may no longer refer to the same bytes. */
     state_.undo_count = 0;
     state_.undo_head  = 0;
 

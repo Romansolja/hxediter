@@ -1,6 +1,3 @@
-/* status_bar.cpp — Bottom status bar with mode/state badges, transient
- * messages, and the contextual hint that follows keyboard focus. */
-
 #include "ui/status_bar.h"
 #include "ui/layout.h"
 
@@ -18,8 +15,7 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImVec2 ts      = ImGui::CalcTextSize(text);
     ImVec2 padding = ImVec2(layout::kBadgePadX, layout::kBadgePadY);
     ImVec2 p0      = ImGui::GetCursorScreenPos();
-    /* Lift the badge up so its text baseline matches plain Text() that
-     * was aligned with AlignTextToFramePadding earlier in the line. */
+    /* Align badge baseline with AlignTextToFramePadding text on the same line. */
     float frame_pad_y = ImGui::GetStyle().FramePadding.y;
     p0.y += frame_pad_y - padding.y;
 
@@ -59,7 +55,6 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
                 core.GetTotalPages(),
                 core.GetFileSize());
 
-    /* Mode / state badges */
     ImGui::SameLine(0, 14);
     Badge("OVR", pal.status_neutral_bg, pal.status_neutral_fg);
 
@@ -77,17 +72,11 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         Badge("CLEAN", pal.status_ok_bg, pal.status_ok_fg);
     }
 
-    /* External-modification indicator — red, always shown once tripped
-     * so the user can't miss that they're editing a file another program
-     * has also changed. The resolution modal opens on the next edit or
-     * undo attempt; the badge itself is not clickable because the Badge
-     * renderer uses a non-interactive Dummy for its footprint. */
     if (s.externally_modified) {
         ImGui::SameLine(0, 6);
         Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg);
     }
 
-    /* Help marker explaining the three mode/state badges. */
     ImGui::SameLine(0, 6);
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) {
@@ -114,10 +103,7 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         ImGui::EndTooltip();
     }
 
-    /* Transient status badge (last action / error). Sticky messages pin
-     * until the user clicks the adjacent 'x' button — used for warnings
-     * the user needs to explicitly acknowledge (e.g. "File changed on
-     * disk"). Non-sticky messages fade out on a timer as before. */
+    /* Sticky messages pin until the user clicks 'x'; non-sticky fade on a timer. */
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -149,9 +135,21 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         }
     }
 
-    /* Contextual hint, dim, end-of-line. */
     ImGui::SameLine(0, 14);
     ImGui::TextDisabled("%s", GetContextualHint(s, core));
+
+    char metric[32];
+    if (s.startup_measured)
+        std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
+    else
+        std::snprintf(metric, sizeof(metric), "Startup: \xE2\x80\xA6");
+
+    float metric_w = ImGui::CalcTextSize(metric).x;
+    float avail    = ImGui::GetContentRegionAvail().x;
+    if (avail > metric_w + 8.0f) {
+        ImGui::SameLine(ImGui::GetCursorPosX() + avail - metric_w);
+        ImGui::TextDisabled("%s", metric);
+    }
 }
 
 } /* namespace ui */

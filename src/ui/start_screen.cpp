@@ -1,5 +1,3 @@
-/* start_screen.cpp — Branded landing screen shown when no file is loaded. */
-
 #include "ui/start_screen.h"
 #include "ui/layout.h"
 
@@ -8,6 +6,7 @@
 #include "imgui.h"
 
 #include <cfloat>
+#include <cstdio>
 
 namespace ui {
 
@@ -17,7 +16,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    /* Soft vertical gradient background fill across the whole viewport. */
     ImU32 top_col    = ImGui::GetColorU32(pal.start_bg_top);
     ImU32 bottom_col = ImGui::GetColorU32(pal.start_bg_bottom);
     dl->AddRectFilledMultiColor(
@@ -25,7 +23,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         ImVec2(origin.x + avail.x, origin.y + avail.y),
         top_col, top_col, bottom_col, bottom_col);
 
-    /* ---- Measure every element up front so the column can be centered ---- */
     const char* title_str  = "HxEditer";
     const char* icon_str   = ICON_FA_FILE;
     const char* drop_str   = "Drag and drop a file here";
@@ -42,7 +39,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         icon_sz = ImGui::CalcTextSize(icon_str);
         ImGui::PopFont();
     } else {
-        icon_sz = ImVec2(96.0f, 96.0f); /* placeholder rectangle size */
+        icon_sz = ImVec2(96.0f, 96.0f);
     }
 
     if (s.ui_font) ImGui::PushFont(s.ui_font);
@@ -70,7 +67,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     if (col_top < origin.y + 20.0f) col_top = origin.y + 20.0f;
     float col_cx  = origin.x + avail.x * 0.5f;
 
-    /* ---- 1) Icon (hero file glyph, tinted) ---- */
     if (s.icon_font) {
         ImGui::PushFont(s.icon_font);
         ImGui::SetCursorScreenPos(ImVec2(col_cx - icon_sz.x * 0.5f, col_top));
@@ -79,7 +75,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         ImGui::PopStyleColor();
         ImGui::PopFont();
     } else {
-        /* Fallback: drawn rounded rectangle when FA font is missing. */
         ImVec2 p0(col_cx - 48.0f, col_top);
         ImVec2 p1(col_cx + 48.0f, col_top + 96.0f);
         ImVec4 fill = pal.start_icon; fill.w = 0.25f;
@@ -90,7 +85,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     float y = col_top + icon_sz.y + gap_icon_to_title;
 
-    /* ---- 2) Title ---- */
     if (s.title_font) ImGui::PushFont(s.title_font);
     ImGui::SetCursorScreenPos(ImVec2(col_cx - title_sz.x * 0.5f, y));
     ImGui::PushStyleColor(ImGuiCol_Text, pal.start_title_text);
@@ -99,13 +93,11 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     if (s.title_font) ImGui::PopFont();
     y += title_sz.y + gap_title_to_drop;
 
-    /* ---- 3) Drag-and-drop hint (dimmed) ---- */
     if (s.ui_font) ImGui::PushFont(s.ui_font);
     ImGui::SetCursorScreenPos(ImVec2(col_cx - drop_sz.x * 0.5f, y));
     ImGui::TextDisabled("%s", drop_str);
     y += drop_sz.y + gap_drop_to_button;
 
-    /* ---- 4) Select File button ---- */
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
     ImGui::PushStyleColor(ImGuiCol_Button,        pal.btn_primary);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.btn_primary_hover);
@@ -126,7 +118,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     y += button_sz.y;
 
-    /* ---- 5) Load error (if any) ---- */
     if (load_error && *load_error) {
         y += gap_button_to_err;
         ImVec2 err_sz = ImGui::CalcTextSize(load_error);
@@ -138,11 +129,8 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     if (s.ui_font) ImGui::PopFont();
 
-    /* ---- 6) Drive the ImGuiFileDialog display / result pump ----
-     * Must be called every frame on the start screen so the dialog window,
-     * once opened, has a chance to render. Returns true when the user
-     * confirms or cancels. On confirm we write the chosen path to
-     * out_pending_path and let the main loop pick it up like a drop event. */
+    /* Must be called every frame so the dialog window, once opened, has
+     * a chance to render. */
     ImVec2 dlg_min(560.0f, 360.0f);
     ImVec2 dlg_max(FLT_MAX, FLT_MAX);
     if (ImGuiFileDialog::Instance()->Display(
@@ -152,6 +140,20 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         }
         ImGuiFileDialog::Instance()->Close();
     }
+
+    char metric[32];
+    if (s.startup_measured)
+        std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
+    else
+        std::snprintf(metric, sizeof(metric), "Startup: \xE2\x80\xA6");
+
+    if (s.ui_font) ImGui::PushFont(s.ui_font);
+    ImVec2 metric_sz = ImGui::CalcTextSize(metric);
+    const float pad = 12.0f;
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - metric_sz.x - pad,
+                                     origin.y + avail.y - metric_sz.y - pad));
+    ImGui::TextDisabled("%s", metric);
+    if (s.ui_font) ImGui::PopFont();
 }
 
 } /* namespace ui */

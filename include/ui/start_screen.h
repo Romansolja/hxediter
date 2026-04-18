@@ -1,5 +1,3 @@
-/* start_screen.h — Branded landing screen shown when no file is loaded. */
-
 #pragma once
 
 #include "ui/gui_state.h"

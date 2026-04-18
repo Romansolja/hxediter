@@ -1,5 +1,3 @@
-/* gui_state.cpp — GuiState helper methods. */
-
 #include "ui/gui_state.h"
 #include "ui/layout.h"
 

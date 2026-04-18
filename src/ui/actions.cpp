@@ -1,5 +1,3 @@
-/* actions.cpp — Hex parsing helpers and editor command handlers. */
-
 #include "ui/actions.h"
 
 #include <cinttypes>
@@ -87,9 +85,8 @@ void DoSearch(GuiState& s, HexEditorCore& core) {
 }
 
 void DoUndo(GuiState& s, HexEditorCore& core) {
-    /* An external writer may have touched the same offset since the
-     * undo entry was recorded. Restoring our old_val would clobber
-     * the external change with stale data. Gate through the modal. */
+    /* An external writer may have touched the same offset since we
+     * recorded the undo entry — restoring old_val would clobber it. */
     if (s.externally_modified) {
         s.conflict_modal_open = true;
         return;
@@ -119,9 +116,8 @@ void CommitEdit(GuiState& s, HexEditorCore& core) {
         return;
     }
 
-    /* Conflict gate: if the file changed on disk since we opened it, we
-     * refuse to blind-overwrite. Stash the pending edit and pop the
-     * resolution modal; the user picks Reload / Keep-mine / Cancel. */
+    /* If the file changed on disk, stash the edit and gate through the
+     * resolution modal instead of blind-overwriting. */
     if (s.externally_modified) {
         s.pending_edit_offset = s.selected_byte;
         s.pending_edit_value  = (unsigned char)v;

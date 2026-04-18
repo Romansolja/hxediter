@@ -1,20 +1,15 @@
-/* fileops.c — File I/O operations */
-
 #include "fileops.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #if defined(_WIN32)
-#  include <share.h>   /* _SH_DENYNO */
+#  include <share.h>
 #endif
 
-/* Plain fopen on MSVC calls _fsopen with _SH_SECURE (= _SH_DENYWR), which
- * means "no other process may write to this file while I have it open."
- * That silently blocks Notepad/VS Code/etc. from saving over a file that
- * hxediter is currently viewing, and the user never sees a hint why.
- * We want the opposite: share freely, and catch any external write via
- * the mtime watcher in HexEditorCore. */
+/* Plain fopen on MSVC uses _SH_SECURE (= _SH_DENYWR), which silently
+ * blocks external tools from saving over a file we have open. We want
+ * the opposite: share freely, detect external writes via the mtime watcher. */
 FILE *open_file_shared(const char *path, const char *mode)
 {
 #if defined(_WIN32)
@@ -24,7 +19,6 @@ FILE *open_file_shared(const char *path, const char *mode)
 #endif
 }
 
-/* Returns file size in bytes, or -1 on error */
 int64_t get_file_size(FILE *fp)
 {
     int64_t size;
@@ -40,8 +34,6 @@ int64_t get_file_size(FILE *fp)
     return size;
 }
 
-/* Searches for a byte pattern by streaming the file in overlapping chunks.
- * Returns offset of match, or -1 if not found. */
 int64_t search_bytes(FILE *fp, int64_t file_size,
                      int64_t start, const unsigned char *pattern, int pattern_len)
 {
@@ -62,9 +54,8 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
 
         got = fread(chunk, 1, SEARCH_CHUNK, fp);
         if (got < (size_t)pattern_len)
-            break;  /* Not enough bytes left for any possible match */
+            break;
 
-        /* Scan this chunk: memchr for the first byte, memcmp to confirm. */
         search_ptr = chunk;
         remaining = (int)got;
         while (remaining >= pattern_len) {
@@ -80,17 +71,16 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
             remaining = (int)got - (int)(search_ptr - chunk);
         }
 
-        /* Advance, overlapping by (pattern_len - 1) so a pattern straddling
-         * the chunk boundary is still caught on the next iteration. */
+        /* Overlap by (pattern_len - 1) so a pattern straddling the chunk
+         * boundary is still caught on the next iteration. */
         pos += (int64_t)got - (pattern_len - 1);
     }
 
     return -1;
 }
 
-/* Patches a single byte at 'offset' in the open file. Returns 0 on success,
- * -1 on failure. fflush forces stdio to surface any deferred write error
- * here, instead of letting it appear later as a confusing seek failure. */
+/* fflush surfaces any deferred write error here instead of letting it
+ * reappear later as a confusing seek failure. */
 int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 {
     if (fseek64(fp, offset, SEEK_SET) != 0) return -1;
@@ -99,10 +89,9 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
     return 0;
 }
 
-/* Two-handle write path: the long-lived HexEditorCore handle stays
- * read-only so external tools (Notepad, VSCode, git, antivirus) can open
- * the file for write without hitting a sharing violation. Each byte edit
- * briefly opens its own write handle, applies the patch, and closes. */
+/* The long-lived core handle stays read-only so external tools can open
+ * the file for write without a sharing violation. Each edit opens its
+ * own transient write handle. */
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 {
     FILE *wf = open_file_shared(path, "rb+");
@@ -122,17 +111,16 @@ int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 #  include <windows.h>
 #endif
 
-/* Probes the file with an exclusive (no-share) open. On Windows, if another
- * process already holds a handle to it, CreateFileA fails with
- * ERROR_SHARING_VIOLATION — that's our signal. Other failures (missing file,
- * permission denied) are left for the caller's normal fopen path to report. */
+/* Probes with an exclusive (no-share) open. On Windows, another process
+ * already holding the file causes ERROR_SHARING_VIOLATION — that's our
+ * signal. Other failures are left for the caller's normal fopen path. */
 bool is_file_held_by_other_process(const char *path)
 {
 #if defined(_WIN32)
     HANDLE h = CreateFileA(
         path,
         GENERIC_READ,
-        0,                      /* dwShareMode = 0: deny all sharing */
+        0,
         NULL,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL,
@@ -148,10 +136,8 @@ bool is_file_held_by_other_process(const char *path)
 #endif
 }
 
-/* Folds mtime (seconds) and file size into a single 64-bit token we can
- * compare against a baseline stored at open time. Including size means we
- * also detect third-party truncations/appends that happen to land in the
- * same mtime granularity. Returns -1 if the file can't be stat'd. */
+/* Folds mtime and size into a single equality token. Including size
+ * catches truncations/appends that land within the same mtime granularity. */
 int64_t get_file_mtime_token(const char *path)
 {
 #if defined(_WIN32)
@@ -161,9 +147,6 @@ int64_t get_file_mtime_token(const char *path)
     struct stat st;
     if (stat(path, &st) != 0) return -1;
 #endif
-    /* Use a simple mix that stays within int64_t without risk of overflow.
-     * mtime fits comfortably in 32 bits for any realistic date; size is
-     * XOR'd in at a high bit so equal mtimes with different sizes differ. */
     int64_t mtime = (int64_t)st.st_mtime;
     int64_t size  = (int64_t)st.st_size;
     return (mtime << 20) ^ size;
