@@ -35,3 +35,11 @@ imgui.ini
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Per-release artifacts from the updater release workflow
+SHA256SUMS.txt
+# Stray diagnostic build outputs (e.g. from PowerShell compile tests)
+test.obj
+hello.cpp
+winhello.cpp
+*.log

@@ -1,5 +1,3 @@
-/* gui.h — Dear ImGui hex editor view */
-
 #pragma once
 
 #include "hex_editor_core.h"
@@ -9,24 +7,24 @@
 
 struct ImFont;
 
-/* Set the four fonts used by the editor. All may be null — the UI falls back
- * gracefully (small elements use the default font, the start-screen icon
- * degrades to a drawn rectangle when icon_font is null). */
+/* Any font may be null — UI falls back (default font for text; start-screen
+ * icon degrades to a drawn rectangle when icon_font is null).
+ * icon_font_small is a narrow-range FA atlas sized for toolbar glyphs. */
 void SetEditorFonts(ImFont* ui_font,
                     ImFont* mono_font,
                     ImFont* title_font,
-                    ImFont* icon_font);
+                    ImFont* icon_font,
+                    ImFont* icon_font_small);
 
-/* Render one frame of the editor UI. Call between ImGui::NewFrame() and
- * ImGui::Render() in the main loop.
- *
- * state           — which screen to render (StartScreen or HexView).
- * core            — non-null iff state == HexView.
- * load_error      — optional message shown on the start screen (may be null).
- * out_pending_path— non-null; the start screen's Select File button writes
- *                   the chosen path here, and the main loop consumes it on
- *                   the next iteration the same way it consumes GLFW drops. */
+void SetStartupDuration(float duration_ms);
+
+/* core is non-null iff state == HexView. out_pending_path receives the
+ * Select File button's result, consumed by the main loop like a GLFW drop.
+ * out_installer_to_launch receives the path of a verified update installer
+ * when the user clicks "Install and restart" in Settings; the main loop
+ * hands off to updater-helper.exe and shuts down. */
 void RenderHexEditorUI(AppState state,
                        HexEditorCore* core,
                        const char* load_error,
-                       std::string* out_pending_path);
+                       std::string* out_pending_path,
+                       std::string* out_installer_to_launch);

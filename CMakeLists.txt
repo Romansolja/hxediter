@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(hxediter
-    VERSION 4.0.0
+    VERSION 4.1.0
     DESCRIPTION "A hex editor built with Dear ImGui"
     HOMEPAGE_URL "https://github.com/Romansolja/hxediter"
     LANGUAGES CXX
@@ -69,6 +69,19 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(imguifiledialog)
 
 # ---------------------------------------------------------------------------
+# nlohmann/json — single-header JSON parser for the GitHub releases API
+# ---------------------------------------------------------------------------
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install    OFF CACHE INTERNAL "")
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
+# ---------------------------------------------------------------------------
 # OpenGL (system library)
 # ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
@@ -82,6 +95,7 @@ add_executable(hxediter
     src/hex_editor_core.cpp
     src/fileops.cpp
     src/undo.cpp
+    src/updater.cpp
     src/ui/theme.cpp
     src/ui/gui_state.cpp
     src/ui/actions.cpp
@@ -90,6 +104,7 @@ add_executable(hxediter
     src/ui/status_bar.cpp
     src/ui/start_screen.cpp
     src/ui/help_panel.cpp
+    src/ui/settings_panel.cpp
     ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
@@ -97,7 +112,13 @@ target_include_directories(hxediter PRIVATE
     include
     ${imguifiledialog_SOURCE_DIR}
 )
-target_link_libraries(hxediter PRIVATE imgui glfw OpenGL::GL)
+target_link_libraries(hxediter PRIVATE
+    imgui glfw OpenGL::GL
+    nlohmann_json::nlohmann_json
+    winhttp bcrypt
+)
+
+target_compile_definitions(hxediter PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
 # ---------------------------------------------------------------------------
 # Static-link the MinGW C++ runtime so the binary is self-contained.
@@ -108,6 +129,17 @@ if(MINGW)
     target_link_options(hxediter PRIVATE -static -mwindows)
 endif()
 
+# ---------------------------------------------------------------------------
+# updater-helper — tiny companion exe that waits for hxediter to exit
+# before ShellExecute-ing the NSIS installer with UAC elevation. The main
+# app copies the installed helper to %TEMP% at update time so NSIS's
+# uninstall-before-install step can delete the installed copy freely.
+# ---------------------------------------------------------------------------
+add_executable(hxediter-updater-helper WIN32 tools/updater_helper/main.cpp)
+if(MINGW)
+    target_link_options(hxediter-updater-helper PRIVATE -static -mwindows)
+endif()
+
 # Stage runtime assets (fonts) next to the binary so the relative path
 # "assets/fonts/..." used by the font loader resolves regardless of the
 # working directory CLion's Run Configuration chooses.
@@ -116,7 +148,7 @@ file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_BINARY_DIR})
 # ---------------------------------------------------------------------------
 # Install rules
 # ---------------------------------------------------------------------------
-install(TARGETS hxediter RUNTIME DESTINATION .)
+install(TARGETS hxediter hxediter-updater-helper RUNTIME DESTINATION .)
 install(DIRECTORY assets DESTINATION .)
 install(FILES LICENSE.txt DESTINATION .)
 
@@ -159,3 +191,9 @@ set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
 )
 
 include(CPack)
+
+add_custom_target(make_installer
+        COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target package
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running CPack / NSIS to produce HxEditer-${PROJECT_VERSION}-win64.exe"
+)

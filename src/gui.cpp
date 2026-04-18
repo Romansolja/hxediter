@@ -1,10 +1,3 @@
-/* gui.cpp — Dear ImGui hex editor frame entry.
- *
- * All rendering for the individual UI regions (toolbar, hex grid,
- * status bar, start screen, help panel) now lives under src/ui/.
- * This file is the thin frame-shell that wires them together plus
- * the global keyboard-shortcut handler. */
-
 #include "gui.h"
 #include "platform.h"
 #include "app_state.h"
@@ -14,6 +7,7 @@
 #include "ui/help_panel.h"
 #include "ui/hex_grid.h"
 #include "ui/layout.h"
+#include "ui/settings_panel.h"
 #include "ui/start_screen.h"
 #include "ui/status_bar.h"
 #include "ui/theme.h"
@@ -28,13 +22,8 @@
 
 namespace {
 
-/* Single owner of all persistent editor UI state. Renderers receive it
- * by reference instead of reading file-scope globals. */
 ui::GuiState g_state;
 
-/* ------------------------------------------------------------------ */
-/* Accessibility helpers                                              */
-/* ------------------------------------------------------------------ */
 void CyclePalette(ui::GuiState& s) {
     int next = ((int)s.palette + 1) % (int)ui::GuiState::PAL_COUNT;
     s.palette = (ui::GuiState::Palette)next;
@@ -53,19 +42,14 @@ void AdjustFontScale(ui::GuiState& s, float delta) {
     s.SetStatus(buf, ui::GuiState::STATUS_INFO);
 }
 
-/* ------------------------------------------------------------------ */
-/* Keyboard shortcuts                                                 */
-/* ------------------------------------------------------------------ */
 void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
     ImGuiIO& io = ImGui::GetIO();
 
-    /* F1 toggles the help panel even when a text field is focused. */
+    /* F1 must work even when a text field is focused. */
     if (ImGui::IsKeyPressed(ImGuiKey_F1)) s.show_help = !s.show_help;
 
-    /* Dismiss the help panel on any click that wasn't consumed by a
-     * widget (so clicking the toolbar `?` button or a hex byte still
-     * works as expected). Gated on show_help so this is a no-op once
-     * the panel is already hidden. */
+    /* Click-outside dismissal for the help panel. Gated on show_help so
+     * it's a no-op once hidden. */
     if (s.show_help &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered() &&
@@ -78,12 +62,10 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
     const bool ctrl  = io.KeyCtrl;
     const bool shift = io.KeyShift;
 
-    /* Undo + pagination (unchanged from the original handler). */
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) ui::DoUndo(s, core);
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown))  { if (core.PageNext()) s.MarkInteracted(); }
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp))    { if (core.PagePrev()) s.MarkInteracted(); }
 
-    /* Font scale */
     if (ctrl && (ImGui::IsKeyPressed(ImGuiKey_Equal) ||
                  ImGui::IsKeyPressed(ImGuiKey_KeypadAdd))) {
         AdjustFontScale(s, +ui::layout::kFontScaleStep);
@@ -97,18 +79,12 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
         s.SetStatus("Font scale: 100%", ui::GuiState::STATUS_INFO);
     }
 
-    /* Palette cycle (Ctrl+Shift+P) */
     if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_P)) {
         CyclePalette(s);
     }
 
-    /* Byte-grid arrow navigation.
-     *
-     * Guards:
-     *   - no inline edit is active (selected_byte < 0)
-     *   - ImGui's keyboard nav highlight isn't currently on a widget
-     *     (io.NavVisible) — otherwise Tab-focused buttons would eat
-     *     the same arrow press and we'd double-move. */
+    /* Gated on !io.NavVisible so Tab-focused buttons don't eat the same
+     * arrow press and cause a double-move. */
     if (s.selected_byte < 0 && !io.NavVisible) {
         const int64_t size = core.GetFileSize();
         const int64_t bpl  = BYTES_PER_LINE;
@@ -146,7 +122,6 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
                 s.MarkInteracted();
                 ensure_visible(s.caret_byte);
             } else if (ImGui::IsKeyPressed(ImGuiKey_F2)) {
-                /* Start editing the byte under the caret. */
                 if (s.caret_byte >= 0 && !core.IsReadOnly()) {
                     s.selected_byte = s.caret_byte;
                     s.edit_buf[0]   = '\0';
@@ -161,28 +136,30 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
 
 } /* anonymous namespace */
 
-/* ------------------------------------------------------------------ */
-/* Public entry                                                       */
-/* ------------------------------------------------------------------ */
 void SetEditorFonts(ImFont* ui_font, ImFont* mono_font,
-                    ImFont* title_font, ImFont* icon_font) {
-    g_state.ui_font    = ui_font;
-    g_state.mono_font  = mono_font;
-    g_state.title_font = title_font;
-    g_state.icon_font  = icon_font;
+                    ImFont* title_font, ImFont* icon_font,
+                    ImFont* icon_font_small) {
+    g_state.ui_font         = ui_font;
+    g_state.mono_font       = mono_font;
+    g_state.title_font      = title_font;
+    g_state.icon_font       = icon_font;
+    g_state.icon_font_small = icon_font_small;
+}
+
+void SetStartupDuration(float duration_ms) {
+    g_state.startup_duration_ms = duration_ms;
+    g_state.startup_measured    = true;
 }
 
 void RenderHexEditorUI(AppState state,
                        HexEditorCore* core,
                        const char* load_error,
-                       std::string* out_pending_path) {
+                       std::string* out_pending_path,
+                       std::string* out_installer_to_launch) {
     auto& s = g_state;
 
-    /* Session-only font scale is applied every frame. Reset to 1.0f on
-     * each launch — persistence is intentionally out of scope. */
     ImGui::GetIO().FontGlobalScale = s.font_scale;
 
-    /* Smooth the help-panel visibility toward its target. */
     float dt = ImGui::GetIO().DeltaTime;
     float t  = dt * ui::layout::kHelpAnimSpeed;
     if (t < 0.0f) t = 0.0f;
@@ -205,15 +182,11 @@ void RenderHexEditorUI(AppState state,
                               : std::string("hxediter");
     ImGui::Begin(title.c_str(), nullptr, flags);
 
-    /* Palette drives every renderer via const reference. Style colors
-     * and style vars that were pushed inline in the old gui.cpp now
-     * live in theme::PushEditorStyle. */
     const auto& pal = ui::theme::Active(s.palette);
     ui::theme::PushEditorStyle(pal);
 
-    /* Reset focus tracker each frame; toolbar/grid re-set it via
-     * IsItemActive checks so the contextual hint can follow keyboard
-     * focus. */
+    /* Reset each frame; toolbar/grid re-set via IsItemActive so the
+     * contextual hint can follow keyboard focus. */
     s.focus_field = (s.selected_byte >= 0) ? ui::GuiState::FOCUS_BYTE
                                            : ui::GuiState::FOCUS_NONE;
 
@@ -224,21 +197,14 @@ void RenderHexEditorUI(AppState state,
         return;
     }
 
-    /* Invariant: state == HexView implies core != nullptr (guaranteed
-     * by the main loop's load-completion block — a failed load resets
-     * state back to StartScreen before this function runs). */
+    /* Invariant: state == HexView implies core != nullptr — the main
+     * loop resets state to StartScreen on any failed load. */
     HexEditorCore& core_ref = *core;
 
-    /* Poll the file mtime/size baseline. Once we notice drift we latch
-     * the flag until the user resolves it; we don't clear it on our own,
-     * because the baseline would immediately rebase if we called reload
-     * without confirmation. Cheap: a single _stat64 per frame on local FS.
-     *
-     * The transient warning is sticky so the user doesn't miss it if they
-     * happen to be looking at a different part of the screen when the
-     * external write lands. They dismiss it by clicking the 'x' next to
-     * the badge; the separate red EXTERNALLY MODIFIED indicator stays up
-     * until the edit/undo conflict modal actually resolves the state. */
+    /* Once drift is noticed the flag latches until the user resolves it;
+     * we don't auto-clear, because the baseline would immediately rebase
+     * if reload fired without confirmation. Sticky status so the warning
+     * can't be missed while the user's attention is elsewhere. */
     if (!s.externally_modified && core_ref.HasExternalModification()) {
         s.externally_modified = true;
         s.SetStatus("File changed on disk", ui::GuiState::STATUS_WARN, true);
@@ -249,18 +215,13 @@ void RenderHexEditorUI(AppState state,
     if (s.ui_font) ImGui::PopFont();
     ImGui::Separator();
 
-    /* Layout is shared between the header strip (rendered in its own
-     * child so it stays put while the body scrolls) and the grid body
-     * (rendered inside the ##hexview child). Zero left padding on both
-     * children keeps SameLine(x) calls landing on the same pixels. */
     if (s.mono_font) ImGui::PushFont(s.mono_font);
     ui::HexLayout layout = ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x);
 
-    /* Header and body MUST share the same window.Pos.x, otherwise the
-     * ImGui::SameLine(absolute_x) calls in RenderHexHeader and
-     * RenderHexGrid land at different pixels and the byte columns
-     * drift out from under the header labels. See the comment block
-     * in the original gui.cpp for the full SameLine math. */
+    /* Header and body MUST share the same window.Pos.x — the
+     * SameLine(absolute_x) calls inside both renderers land on different
+     * pixels otherwise and the byte columns drift out from under the
+     * header labels. Zero WindowPadding keeps them aligned. */
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexheader",
                       ImVec2(0, 0),
@@ -284,25 +245,15 @@ void RenderHexEditorUI(AppState state,
     ui::RenderStatusBar(s, pal, core_ref);
     if (s.ui_font) ImGui::PopFont();
 
-    /* --- External-modification resolution modal ---
-     *
-     * Opens when either (a) the user tried to commit an edit while the
-     * externally_modified flag was set, or (b) they clicked the red
-     * "EXTERNALLY MODIFIED" badge in the status bar. Three exits:
-     *
-     *   Reload from disk — core.ReloadFromDisk(): refresh size, drop
-     *                      undo stack, rebase baseline, discard any
-     *                      pending edit. Safest option; it's the
-     *                      default focused button.
-     *   Keep my edits    — clears the flag and commits the pending edit
-     *                      (if any). "Overwrite anyway" semantics.
-     *   Cancel           — closes the modal, leaves the flag set,
-     *                      discards the pending edit. User can keep
-     *                      browsing; the next edit will re-trigger.
-     */
+    if (s.show_settings) {
+        ImGui::OpenPopup("Settings##settings");
+        s.show_settings = false;
+    }
+    ui::RenderSettingsPopup(s, out_installer_to_launch);
+
     if (s.conflict_modal_open) {
         ImGui::OpenPopup("File changed on disk##conflict");
-        s.conflict_modal_open = false;  /* one-shot trigger */
+        s.conflict_modal_open = false;
     }
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
