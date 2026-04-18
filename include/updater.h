@@ -55,4 +55,12 @@ void RequestAbandon();
  * the error back into the Snapshot so the Settings popup can show it. */
 void SetLaunchError(std::string msg);
 
+/* Called from the main loop every frame. If a download has completed and
+ * the installer path hasn't been consumed yet, moves it into out_path and
+ * resets the download state so the handoff fires exactly once. Returns
+ * true if out_path was written. Decouples the handoff from popup
+ * visibility — non-modal popups can be dismissed by focus loss, which
+ * would otherwise strand the downloaded installer. */
+bool ConsumeInstallerPath(std::string& out_path);
+
 } /* namespace updater */

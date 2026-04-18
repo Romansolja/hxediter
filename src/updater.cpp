@@ -727,4 +727,18 @@ void SetLaunchError(std::string msg) {
     });
 }
 
+bool ConsumeInstallerPath(std::string& out_path) {
+    std::lock_guard<std::mutex> lk(g_mx);
+    if (g_snap.download != DownloadState::Complete) return false;
+    if (g_snap.installer_path.empty())               return false;
+    out_path = std::move(g_snap.installer_path);
+    /* Reset so subsequent frames don't re-trigger the handoff. Keep the
+     * check-state ("UpdateAvailable"/"UpToDate") so the UI still reflects
+     * that a newer version exists while the installer runs. */
+    g_snap.download       = DownloadState::Idle;
+    g_snap.bytes_received = 0;
+    g_snap.bytes_total    = 0;
+    return true;
+}
+
 } /* namespace updater */

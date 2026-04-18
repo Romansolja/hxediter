@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(hxediter
-    VERSION 4.1.0
+    VERSION 4.1.1
     DESCRIPTION "A hex editor built with Dear ImGui"
     HOMEPAGE_URL "https://github.com/Romansolja/hxediter"
     LANGUAGES CXX

@@ -345,10 +345,19 @@ int main(int argc, char* argv[]) {
                           drag_over_state);
 
 #ifdef _WIN32
-        /* Settings popup has written a verified installer path here. Spawn
-         * the helper (which waits for us to exit then elevates). If the
-         * spawn itself fails, surface the error through the updater module
-         * so the next Settings open shows it — do NOT close the window. */
+        /* If the user dismissed the (non-modal) Settings popup mid-download,
+         * the popup won't write installer_to_launch when it completes. Pull
+         * the path directly from the updater module so the handoff fires
+         * regardless of popup visibility. */
+        if (ctx.installer_to_launch.empty()) {
+            updater::ConsumeInstallerPath(ctx.installer_to_launch);
+        }
+
+        /* Settings popup has written a verified installer path here (or
+         * ConsumeInstallerPath just did). Spawn the helper (which waits
+         * for us to exit then elevates). If the spawn itself fails,
+         * surface the error through the updater module so the next
+         * Settings open shows it — do NOT close the window. */
         if (!ctx.installer_to_launch.empty()) {
             std::string err;
             if (LaunchUpdaterHelper(ctx.installer_to_launch, err)) {
