@@ -18,6 +18,21 @@ void SetEditorFonts(ImFont* ui_font,
 
 void SetStartupDuration(float duration_ms);
 
+/* Called once at startup with the value read from
+ * glfwGetWindowContentScale. Stored on GuiState so per-widget code
+ * (help panel width, etc.) can multiply hardcoded pixel constants. */
+void SetContentScale(float scale);
+
+/* Snapshot of the GuiState read-only default toggle. main.cpp consults
+ * this right after constructing a HexEditorCore so the "Open files as
+ * read-only" setting applies to newly loaded files. */
+bool ReadonlyDefault();
+
+/* Snapshot of the GuiState background-throttle toggle. main.cpp reads
+ * it once per loop iteration to decide between glfwPollEvents and
+ * glfwWaitEventsTimeout when the window is unfocused. */
+bool BackgroundThrottle();
+
 /* core is non-null iff state == HexView. out_pending_path receives the
  * Select File button's result, consumed by the main loop like a GLFW drop.
  * out_installer_to_launch receives the path of a verified update installer

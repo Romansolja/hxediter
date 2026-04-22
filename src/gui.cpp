@@ -161,6 +161,18 @@ void SetStartupDuration(float duration_ms) {
     g_state.startup_measured    = true;
 }
 
+void SetContentScale(float scale) {
+    g_state.content_scale = (scale < 1.0f) ? 1.0f : scale;
+}
+
+bool ReadonlyDefault() {
+    return g_state.readonly_default;
+}
+
+bool BackgroundThrottle() {
+    return g_state.background_throttle;
+}
+
 void RenderHexEditorUI(AppState state,
                        HexEditorCore* core,
                        const char* load_error,

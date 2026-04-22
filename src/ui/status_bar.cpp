@@ -2,6 +2,7 @@
 #include "ui/layout.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include <cinttypes>
 #include <cstdint>
@@ -45,6 +46,42 @@ const char* GetContextualHint(const GuiState& s, const HexEditorCore& core) {
     return "Click any byte to edit, arrow keys to move, F1 for shortcuts";
 }
 
+/* Transparent close button with a custom-drawn X glyph, matching the quick-reference
+ * panel's close affordance (see help_panel.cpp) so both sites read identically. */
+static bool DismissButton(const char* id, float size,
+                          const theme::Palette& pal, float alpha) {
+    ImVec4 hover_c = pal.help_close_hover;  hover_c.w *= alpha;
+    ImVec4 act_c   = pal.help_close_active; act_c.w   *= alpha;
+    ImVec4 glyph   = pal.help_close_glyph;  glyph.w   *= alpha;
+
+    /* Center vertically on the current text line. */
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    float line_center = pos.y + ImGui::GetStyle().FramePadding.y
+                      + ImGui::GetTextLineHeight() * 0.5f;
+    pos.y = line_center - size * 0.5f;
+    ImGui::SetCursorScreenPos(pos);
+
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover_c);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  act_c);
+    ImGui::PushStyleVar  (ImGuiStyleVar_FrameBorderSize, 0.0f);
+    char btn_id[48];
+    std::snprintf(btn_id, sizeof(btn_id), "##%s", id);
+    bool clicked = ImGui::Button(btn_id, ImVec2(size, size));
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+
+    ImDrawList* dl  = ImGui::GetWindowDrawList();
+    ImU32       col = ImGui::GetColorU32(glyph);
+    float       pad = size * (5.0f / 18.0f);
+    dl->AddLine(ImVec2(pos.x + pad,        pos.y + pad),
+                ImVec2(pos.x + size - pad, pos.y + size - pad), col, 1.5f);
+    dl->AddLine(ImVec2(pos.x + size - pad, pos.y + pad),
+                ImVec2(pos.x + pad,        pos.y + size - pad), col, 1.5f);
+
+    return clicked;
+}
+
 void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) {
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
@@ -55,14 +92,14 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
                 core.GetTotalPages(),
                 core.GetFileSize());
 
-    ImGui::SameLine(0, 14);
+    ImGui::SameLine(0, layout::kStatusGroupGap);
     Badge("OVR", pal.status_neutral_bg, pal.status_neutral_fg);
 
-    ImGui::SameLine(0, 6);
+    ImGui::SameLine(0, layout::kStatusInGroup);
     if (core.IsReadOnly()) Badge("READ-ONLY", pal.status_read_bg,    pal.status_read_fg);
     else                   Badge("EDIT",      pal.status_neutral_bg, pal.status_neutral_fg);
 
-    ImGui::SameLine(0, 6);
+    ImGui::SameLine(0, layout::kStatusInGroup);
     int undos = core.GetUndoCount();
     if (undos > 0) {
         char buf[32];
@@ -73,11 +110,11 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
     }
 
     if (s.externally_modified) {
-        ImGui::SameLine(0, 6);
+        ImGui::SameLine(0, layout::kStatusInGroup);
         Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg);
     }
 
-    ImGui::SameLine(0, 6);
+    ImGui::SameLine(0, layout::kStatusInGroup);
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
@@ -103,7 +140,8 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         ImGui::EndTooltip();
     }
 
-    /* Sticky messages pin until the user clicks 'x'; non-sticky fade on a timer. */
+    /* Sticky messages pin until the user clicks x; non-sticky fade on a timer.
+     * Render inline so the subsequent budget pass starts from post-sticky space. */
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -120,12 +158,14 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
             if (alpha_raw > 1.0f) alpha_raw = 1.0f;
             alpha = (s.status_timer >= fade_window) ? 1.0f : alpha_raw;
         }
-        ImGui::SameLine(0, 14);
+        ImGui::SameLine(0, layout::kStatusGroupGap);
         Badge(s.status_msg.c_str(), bg, fg, alpha);
 
         if (s.status_sticky) {
-            ImGui::SameLine(0, 4);
-            if (ImGui::SmallButton("x##dismiss_status")) {
+            ImGui::SameLine(0, 4.0f);
+            float sz = ImGui::GetFrameHeight() - 4.0f;
+            if (sz < 10.0f) sz = 10.0f;
+            if (DismissButton("dismiss_status", sz, pal, alpha)) {
                 s.status_msg.clear();
                 s.status_timer  = 0.0f;
                 s.status_sticky = false;
@@ -135,19 +175,53 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         }
     }
 
-    ImGui::SameLine(0, 14);
-    ImGui::TextDisabled("%s", GetContextualHint(s, core));
-
+    /* Priority-budgeted tail. Rank (highest to lowest):
+     *   (a) sticky + dismiss — already rendered above, never dropped if active.
+     *   (b) startup metric, right-anchored — dropped first under pressure.
+     *   (c) contextual hint — truncates with ellipsis, dropped when <~3 chars fit. */
     char metric[32];
     if (s.startup_measured)
         std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
     else
         std::snprintf(metric, sizeof(metric), "Startup: \xE2\x80\xA6");
 
-    float metric_w = ImGui::CalcTextSize(metric).x;
-    float avail    = ImGui::GetContentRegionAvail().x;
-    if (avail > metric_w + 8.0f) {
-        ImGui::SameLine(ImGui::GetCursorPosX() + avail - metric_w);
+    const char* hint      = GetContextualHint(s, core);
+    float       metric_w  = ImGui::CalcTextSize(metric).x;
+    float       hint_full = ImGui::CalcTextSize(hint).x;
+    float       char_w    = ImGui::CalcTextSize("A").x;
+
+    /* Snap cursor to current line so avail reflects space remaining post-sticky. */
+    ImGui::SameLine(0, 0);
+    float line_start_x = ImGui::GetCursorPosX();
+    float avail        = ImGui::GetContentRegionAvail().x;
+
+    bool  show_metric = (avail >= metric_w + layout::kStatusGutter);
+    float hint_room   = show_metric ? (avail - metric_w - layout::kStatusGutter) : avail;
+    bool  show_hint   = (hint_room >= layout::kStatusGroupGap + 3.0f * char_w);
+    float hint_budget = 0.0f;
+    if (show_hint) {
+        hint_budget = hint_room - layout::kStatusGroupGap;
+        if (hint_budget > hint_full) hint_budget = hint_full;
+    }
+
+    if (show_hint) {
+        ImGui::SameLine(0, layout::kStatusGroupGap);
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        pos.y += ImGui::GetStyle().FramePadding.y;
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+        ImGui::RenderTextEllipsis(
+            ImGui::GetWindowDrawList(), pos,
+            ImVec2(pos.x + hint_budget, pos.y + ImGui::GetTextLineHeight()),
+            pos.x + hint_budget, pos.x + hint_budget,
+            hint, nullptr, nullptr);
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(hint_budget, ImGui::GetTextLineHeight()));
+    }
+
+    if (show_metric) {
+        float metric_abs_x = line_start_x + avail - metric_w;
+        ImGui::SameLine(metric_abs_x);
         ImGui::TextDisabled("%s", metric);
     }
 }

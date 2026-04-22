@@ -165,6 +165,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 2) {
         try {
             ctx.core = std::make_unique<HexEditorCore>(argv[1]);
+            if (ReadonlyDefault()) ctx.core->ForceReadOnly();
             ctx.state = AppState::HexView;
         } catch (const std::exception& e) {
             /* Fall through to the start screen with an error. */
@@ -219,6 +220,23 @@ int main(int argc, char* argv[]) {
 
     ImGui::StyleColorsDark();
 
+    /* HiDPI one-time bake: pull the window's content scale once, multiply
+     * every font load size by it, and scale all ImGui style metrics to
+     * match. Static (not reactive to mid-session monitor changes) — the
+     * font atlas is built once, so a second monitor at a different DPI
+     * requires a restart to re-rasterize. */
+    float content_scale = 1.0f;
+    {
+        float sx = 1.0f, sy = 1.0f;
+        glfwGetWindowContentScale(window, &sx, &sy);
+        content_scale = (sx > sy) ? sx : sy;
+        if (content_scale < 1.0f) content_scale = 1.0f;
+    }
+    if (content_scale > 1.0f) {
+        ImGui::GetStyle().ScaleAllSizes(content_scale);
+    }
+    SetContentScale(content_scale);
+
     ImFontConfig ui_cfg;
     ui_cfg.OversampleH = 3;
     ui_cfg.OversampleV = 2;
@@ -241,12 +259,12 @@ int main(int argc, char* argv[]) {
 
     ImFont* ui_font = nullptr;
     for (const auto& path : ui_font_candidates) {
-        ui_font = TryLoadFont(io, path, 17.0f, &ui_cfg);
+        ui_font = TryLoadFont(io, path, 17.0f * content_scale, &ui_cfg);
         if (ui_font) break;
     }
     ImFont* mono_font = nullptr;
     for (const auto& path : mono_font_candidates) {
-        mono_font = TryLoadFont(io, path, 16.0f, &mono_cfg);
+        mono_font = TryLoadFont(io, path, 16.0f * content_scale, &mono_cfg);
         if (mono_font) break;
     }
 
@@ -255,7 +273,7 @@ int main(int argc, char* argv[]) {
     title_cfg.OversampleH = 2;
     title_cfg.OversampleV = 2;
     for (const auto& path : ui_font_candidates) {
-        title_font = TryLoadFont(io, path, 48.0f, &title_cfg);
+        title_font = TryLoadFont(io, path, 48.0f * content_scale, &title_cfg);
         if (title_font) break;
     }
 
@@ -271,7 +289,7 @@ int main(int argc, char* argv[]) {
     icon_cfg.OversampleV = 2;
     icon_cfg.PixelSnapH  = true;
     ImFont* icon_font = TryLoadFont(io,
-        "assets/fonts/fa-solid-900.ttf", 96.0f, &icon_cfg, fa_ranges);
+        "assets/fonts/fa-solid-900.ttf", 96.0f * content_scale, &icon_cfg, fa_ranges);
 
     /* Second, small-size FA atlas for toolbar icons (gear, future friends).
      * Separate from the 96px atlas so each glyph renders at its correct
@@ -285,7 +303,7 @@ int main(int argc, char* argv[]) {
     icon_small_cfg.OversampleV = 2;
     icon_small_cfg.PixelSnapH  = true;
     ImFont* icon_font_small = TryLoadFont(io,
-        "assets/fonts/fa-solid-900.ttf", 18.0f, &icon_small_cfg, fa_small_ranges);
+        "assets/fonts/fa-solid-900.ttf", 18.0f * content_scale, &icon_small_cfg, fa_small_ranges);
 
     if (!ui_font)    ui_font = io.Fonts->AddFontDefault();
     if (!mono_font)  mono_font = ui_font;
@@ -305,7 +323,18 @@ int main(int argc, char* argv[]) {
     bool startup_measured = false;
 
     while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
+        /* Background throttle: when the window is unfocused and the
+         * setting is on, block for up to ~66 ms waiting on events
+         * instead of spinning at vsync rate. Any queued event
+         * (mouse, keyboard, drag, focus) returns immediately, so the
+         * editor snaps back to full responsiveness the instant the
+         * user clicks in. */
+        if (BackgroundThrottle() &&
+            !glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
+            glfwWaitEventsTimeout(1.0 / 15.0);
+        } else {
+            glfwPollEvents();
+        }
 
         /* Reset the old core *before* constructing the new one so the
          * previous handle is closed before HexEditorCore's
@@ -317,6 +346,7 @@ int main(int argc, char* argv[]) {
             ctx.core.reset();
             try {
                 ctx.core = std::make_unique<HexEditorCore>(path);
+                if (ReadonlyDefault()) ctx.core->ForceReadOnly();
                 ctx.load_error.clear();
                 ctx.state = AppState::HexView;
                 std::string new_title = "hxediter — " + ctx.core->GetFilename();

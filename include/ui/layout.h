@@ -21,6 +21,10 @@ constexpr float kBadgePadX     = 7.0f;
 constexpr float kBadgePadY     = 2.0f;
 constexpr float kBadgeRounding = 4.0f;
 
+constexpr float kStatusGroupGap = 14.0f; /* gap between logical groups on the status bar */
+constexpr float kStatusInGroup  = 6.0f;  /* gap between adjacent badges within a group */
+constexpr float kStatusGutter   = 8.0f;  /* min guaranteed gap before right-anchored metric */
+
 constexpr float kHelpPanelWidth    = 460.0f;
 constexpr float kHelpPanelPadX     = 16.0f;
 constexpr float kHelpPanelPadY     = 12.0f;

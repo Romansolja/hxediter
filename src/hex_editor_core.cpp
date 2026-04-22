@@ -180,6 +180,11 @@ bool HexEditorCore::IsReadOnly() const
     return state_.is_readonly != 0;
 }
 
+void HexEditorCore::ForceReadOnly()
+{
+    state_.is_readonly = 1;
+}
+
 int64_t HexEditorCore::GetPageNumber() const
 {
     return (state_.page_offset / PAGE_SIZE) + 1;

@@ -6,22 +6,13 @@
 namespace ui {
 
 void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
-    const float scale = s.font_scale;
+    /* Combine the user's font zoom with the one-time HiDPI multiplier so
+     * every hardcoded pixel constant (panel width, padding, close-X size)
+     * stays proportional on 4K panels. */
+    const float scale = s.font_scale * s.content_scale;
 
     float remaining = ImGui::GetContentRegionAvail().y;
     if (remaining < 90.0f * scale) return;
-
-    ImGui::Dummy(ImVec2(0, 12.0f * scale));
-
-    const float pad_x   = layout::kHelpPanelPadX * scale;
-    const float pad_y   = layout::kHelpPanelPadY * scale;
-    const float panel_w = layout::kHelpPanelWidth * scale;
-    float avail_w = ImGui::GetContentRegionAvail().x;
-    float indent  = (avail_w > panel_w) ? (avail_w - panel_w) * 0.5f : 0.0f;
-    if (indent > 0.0f) ImGui::Indent(indent);
-
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
 
     const char* lines[] = {
         "Quick reference",
@@ -43,14 +34,30 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         "  Search field         Find a hex byte sequence",
     };
     int n = (int)(sizeof(lines) / sizeof(lines[0]));
+
+    const float pad_x   = layout::kHelpPanelPadX * scale;
+    const float pad_y   = layout::kHelpPanelPadY * scale;
+    const float panel_w = layout::kHelpPanelWidth * scale;
     float line_h = ImGui::GetTextLineHeightWithSpacing();
     float panel_h = pad_y * 2 + line_h * (float)n;
     float shown_h = panel_h * visibility;
 
-    if (shown_h > remaining - 8.0f || shown_h < 20.0f) {
-        if (indent > 0.0f) ImGui::Unindent(indent);
-        return;
-    }
+    if (shown_h > remaining - 8.0f || shown_h < 20.0f) return;
+
+    /* Vertical centering within the remaining space below the hex content,
+     * mirrored from start_screen.cpp. Keeps a 12*scale minimum top gap so
+     * the panel never butts against the last byte row on a tight page. */
+    const float min_top = 12.0f * scale;
+    float v_pad = (remaining - shown_h) * 0.5f;
+    if (v_pad < min_top) v_pad = min_top;
+    ImGui::Dummy(ImVec2(0, v_pad));
+
+    float avail_w = ImGui::GetContentRegionAvail().x;
+    float indent  = (avail_w > panel_w) ? (avail_w - panel_w) * 0.5f : 0.0f;
+    if (indent > 0.0f) ImGui::Indent(indent);
+
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
 
     ImVec2 p1(p0.x + panel_w, p0.y + shown_h);
 

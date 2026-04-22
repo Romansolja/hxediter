@@ -48,6 +48,9 @@ public:
     int64_t     GetFileSize() const;
     std::string GetFilename() const;
     bool        IsReadOnly() const;
+    /* One-way latch: flips is_readonly on regardless of filesystem
+     * permissions. Used by the "open as read-only" setting. */
+    void        ForceReadOnly();
     int64_t     GetPageNumber() const;
     int64_t     GetTotalPages() const;
     int         GetUndoCount() const;

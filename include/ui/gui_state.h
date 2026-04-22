@@ -46,6 +46,17 @@ struct GuiState {
      * RenderHexEditorUI. Mirrors the conflict_modal_open one-shot pattern. */
     bool show_settings = false;
 
+    /* When true, main.cpp forces each newly opened file into read-only
+     * mode regardless of filesystem permissions. Already-open files
+     * are not retroactively affected when this is toggled. */
+    bool readonly_default = false;
+
+    /* When true and the window is unfocused, main.cpp swaps
+     * glfwPollEvents for glfwWaitEventsTimeout(1/15) so the editor
+     * drops to ~15 FPS while idle in the background. Any incoming
+     * event wakes the loop immediately. */
+    bool background_throttle = true;
+
     ImFont* ui_font         = nullptr;
     ImFont* mono_font       = nullptr;
     ImFont* title_font      = nullptr;
@@ -53,6 +64,11 @@ struct GuiState {
     ImFont* icon_font_small = nullptr;  /* narrow FA range at toolbar size */
 
     float   font_scale = 1.0f;
+    /* HiDPI multiplier baked at startup from glfwGetWindowContentScale.
+     * UI code multiplies hardcoded pixel layout constants (panel widths,
+     * padding, etc.) by this to keep proportions on 4K / high-DPI panels.
+     * Separate from font_scale so the user's zoom stays orthogonal. */
+    float   content_scale = 1.0f;
     Palette palette    = PAL_DEFAULT;
 
     float startup_duration_ms = 0.0f;

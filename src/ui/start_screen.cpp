@@ -164,6 +164,18 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - metric_sz.x - pad,
                                      origin.y + avail.y - metric_sz.y - pad));
     ImGui::TextDisabled("%s", metric);
+
+    /* Top-right read-only toggle — bare checkbox whose purpose is
+     * revealed by a hover tooltip. Binds to the same GuiState flag
+     * main.cpp consults via ReadonlyDefault() right after constructing
+     * a HexEditorCore. */
+    const float box_h = ImGui::GetFrameHeight();
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - box_h - pad,
+                                     origin.y + pad));
+    ImGui::Checkbox("##readonly_default", &s.readonly_default);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Open files as read-only");
+    }
     if (s.ui_font) ImGui::PopFont();
 
     if (s.drag_overlay_anim > 0.001f) {
