@@ -1,4 +1,4 @@
-# HxEditer v4.2
+# HxEditer v4.2.1
 
 A hex editor for Windows built with Dear ImGui and C++17
 
