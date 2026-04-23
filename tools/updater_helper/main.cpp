@@ -1,18 +1,16 @@
 /* hxediter-updater-helper
  *
- * Tiny companion executable that runs after hxediter spawns it (from a
- * %TEMP% copy of itself), waits for the parent hxediter process to exit
- * so NSIS can delete the installed binary, then launches the NSIS
- * installer with UAC elevation.
+ * Waits for the parent hxediter to exit (so NSIS can delete the installed
+ * binary), then launches the NSIS installer with UAC elevation.
  *
  * Argv:
- *   [1] absolute path to the NSIS installer (HxEditer-X.Y.Z-win64.exe)
+ *   [1] absolute path to HxEditer-X.Y.Z-win64.exe inside %TEMP%
  *   [2] parent hxediter PID (decimal)
  *
- * Exit codes:
- *   0 — installer spawned successfully
- *   1 — bad args
- *   2 — ShellExecute failed (likely UAC declined)
+ * The installer path is strictly validated: it must live under %TEMP% and
+ * match the HxEditer-*-win64.exe naming. Without this, anything that can
+ * spawn the helper could get an arbitrary exe elevated via the "runas"
+ * verb below.
  */
 
 #define WIN32_LEAN_AND_MEAN
@@ -21,9 +19,48 @@
 #include <cwchar>
 #include <cstdlib>
 
-/* Use WinMain (narrow) rather than wWinMain so MinGW's default crt0 finds
- * the entry point without needing -municode. Command-line args are read
- * from GetCommandLineW so argument encoding is still Unicode-correct. */
+static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
+    while (*prefix) {
+        wchar_t a = *s++, b = *prefix++;
+        if (a >= L'A' && a <= L'Z') a = wchar_t(a - L'A' + L'a');
+        if (b >= L'A' && b <= L'Z') b = wchar_t(b - L'A' + L'a');
+        if (a != b) return false;
+    }
+    return true;
+}
+
+static bool InstallerPathLooksSafe(LPCWSTR path) {
+    if (!path || !*path) return false;
+
+    wchar_t full[MAX_PATH];
+    DWORD n = GetFullPathNameW(path, MAX_PATH, full, nullptr);
+    if (n == 0 || n >= MAX_PATH) return false;
+
+    wchar_t temp[MAX_PATH];
+    DWORD tn = GetTempPathW(MAX_PATH, temp);
+    if (tn == 0 || tn >= MAX_PATH) return false;
+
+    if (!StartsWithCI(full, temp)) return false;
+
+    const wchar_t* name = wcsrchr(full, L'\\');
+    name = name ? name + 1 : full;
+    if (!StartsWithCI(name, L"HxEditer-")) return false;
+
+    const wchar_t* tail = wcsstr(name, L"-win64.exe");
+    if (!tail) return false;
+    if (wcslen(tail) != wcslen(L"-win64.exe")) return false;
+
+    DWORD attrs = GetFileAttributesW(full);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) return false;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return false;
+
+    return true;
+}
+
+/* WinMain (narrow) so MinGW's default crt0 finds the entry point without
+ * -municode. Args are still read from GetCommandLineW, so encoding is
+ * Unicode-correct. */
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -35,30 +72,28 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     LPCWSTR installer_path = argv[1];
     DWORD   parent_pid     = (DWORD)_wtoi(argv[2]);
 
-    /* Open the parent for synchronization so we can wait for it to exit.
-     * If it's already gone, OpenProcess returns NULL — that's fine; we
-     * proceed straight to the installer launch. */
+    if (!InstallerPathLooksSafe(installer_path)) {
+        LocalFree(argv);
+        return 1;
+    }
+
     if (parent_pid != 0) {
         HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parent_pid);
         if (parent) {
-            WaitForSingleObject(parent, 30000);  /* up to 30s */
+            WaitForSingleObject(parent, 30000);
             CloseHandle(parent);
         }
     }
 
-    /* Small extra guard so the OS has released the file handle on the
-     * old hxediter.exe before NSIS's uninstaller tries to delete it. */
+    /* Give the OS a moment to release the handle on hxediter.exe so NSIS's
+     * uninstaller can delete it. */
     Sleep(500);
 
-    /* "runas" verb raises the UAC prompt so the NSIS installer (which
-     * requires admin per RequestExecutionLevel) can run. */
     HINSTANCE r = ShellExecuteW(nullptr, L"runas", installer_path,
                                 nullptr, nullptr, SW_SHOWNORMAL);
 
     LocalFree(argv);
 
-    /* ShellExecute returns an HINSTANCE where values <= 32 are errors.
-     * Most common: SE_ERR_ACCESSDENIED (5) when the user declines UAC. */
     if ((INT_PTR)r <= 32) return 2;
     return 0;
 }

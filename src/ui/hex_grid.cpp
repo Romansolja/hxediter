@@ -32,16 +32,13 @@ static float ComputeHexRowWidth(float offset_w, float char_w, float byte_w,
 HexLayout ComputeHexLayout(float avail_w, float scale) {
     HexLayout L;
     L.bytes_per_line = 16;
-    /* CalcTextSize returns unscaled metrics (the outer window holds
-     * FontWindowScale=1). Multiplying by `scale` here gives the widths
-     * that `SetWindowFontScale(scale)` will actually render inside the
-     * grid child — so both the bytes-per-line decision and the x-column
-     * table reflect the final on-screen size. */
+    /* CalcTextSize returns unscaled metrics (outer window's FontWindowScale
+     * is 1); multiply by scale so the layout matches what the grid child
+     * will actually render at SetWindowFontScale(scale). */
     L.char_w   = ImGui::CalcTextSize("0").x * scale;
     L.byte_w   = ImGui::CalcTextSize("FF").x * scale;
     L.offset_w = ImGui::CalcTextSize("00000000").x * scale;
 
-    /* Snap to multiples of 4 when possible. */
     int best = 1;
     for (int candidate = 64; candidate >= 8; candidate -= 4) {
         if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
@@ -60,7 +57,6 @@ HexLayout ComputeHexLayout(float avail_w, float scale) {
     L.bytes_per_line = best;
     L.byte_x.resize((size_t)L.bytes_per_line);
 
-    /* Three gap tiers so the eye can latch onto 4- and 8-byte groups. */
     const float gap_byte  = L.char_w * layout::kGapByteMul;
     const float gap_quad  = L.char_w * layout::kGapQuadMul;
     const float gap_octet = L.char_w * layout::kGapOctetMul;
@@ -143,7 +139,7 @@ void RenderHexGrid(GuiState& s, const theme::Palette& pal,
             ImGui::PushID((int)idx + line * 64);
 
             if (s.selected_byte == off) {
-                /* Zero padding + explicit width keeps the InputText inside one byte cell. */
+                /* Zero padding + explicit width to fit one byte cell. */
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,    ImVec2(0.0f, 0.0f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
                 ImGui::SetNextItemWidth(L.byte_w);
@@ -159,12 +155,11 @@ void RenderHexGrid(GuiState& s, const theme::Palette& pal,
                 if (ImGui::InputText("##edit", s.edit_buf, sizeof(s.edit_buf), flags)) {
                     CommitEdit(s, core);
                 } else if (ImGui::IsItemDeactivated() && !ImGui::IsItemActive()) {
-                    /* Lost focus without Enter — cancel */
                     s.selected_byte = -1;
                 }
                 ImGui::PopStyleVar(2);
             } else {
-                /* Highlight drawn before the text so the glyph stays readable. */
+                /* Draw highlight before text so the glyph stays readable. */
                 bool is_caret = (s.caret_byte == off);
                 bool is_hit   = (s.last_hit   == off);
                 if (is_caret || is_hit) {
@@ -229,7 +224,6 @@ void RenderHexGrid(GuiState& s, const theme::Palette& pal,
         ImGui::TextUnformatted(ascii_buf);
     }
 
-    /* Rendered inside the grid child so it scrolls with the body. */
     if (s.help_anim > 0.01f) {
         RenderHelpPanel(s, pal, s.help_anim);
     }

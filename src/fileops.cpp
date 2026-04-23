@@ -7,9 +7,8 @@
 #  include <share.h>
 #endif
 
-/* Plain fopen on MSVC uses _SH_SECURE (= _SH_DENYWR), which silently
- * blocks external tools from saving over a file we have open. We want
- * the opposite: share freely, detect external writes via the mtime watcher. */
+/* Plain fopen on MSVC uses _SH_DENYWR, silently blocking external saves.
+ * Share freely; detect external writes via the mtime watcher. */
 FILE *open_file_shared(const char *path, const char *mode)
 {
 #if defined(_WIN32)
@@ -71,16 +70,15 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
             remaining = (int)got - (int)(search_ptr - chunk);
         }
 
-        /* Overlap by (pattern_len - 1) so a pattern straddling the chunk
-         * boundary is still caught on the next iteration. */
+        /* Overlap by pattern_len-1 so a pattern straddling chunks hits. */
         pos += (int64_t)got - (pattern_len - 1);
     }
 
     return -1;
 }
 
-/* fflush surfaces any deferred write error here instead of letting it
- * reappear later as a confusing seek failure. */
+/* fflush surfaces deferred write errors here, not later as a confusing
+ * seek failure. */
 int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 {
     if (fseek64(fp, offset, SEEK_SET) != 0) return -1;
@@ -89,9 +87,8 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
     return 0;
 }
 
-/* The long-lived core handle stays read-only so external tools can open
- * the file for write without a sharing violation. Each edit opens its
- * own transient write handle. */
+/* Long-lived core handle stays read-only so external tools can still
+ * open for write; each edit uses a transient write handle. */
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 {
     FILE *wf = open_file_shared(path, "rb+");
@@ -111,9 +108,8 @@ int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 #  include <windows.h>
 #endif
 
-/* Probes with an exclusive (no-share) open. On Windows, another process
- * already holding the file causes ERROR_SHARING_VIOLATION — that's our
- * signal. Other failures are left for the caller's normal fopen path. */
+/* Exclusive probe open; ERROR_SHARING_VIOLATION means another process
+ * holds it. Other failures fall through to the caller's normal fopen. */
 bool is_file_held_by_other_process(const char *path)
 {
 #if defined(_WIN32)
@@ -136,8 +132,8 @@ bool is_file_held_by_other_process(const char *path)
 #endif
 }
 
-/* Folds mtime and size into a single equality token. Including size
- * catches truncations/appends that land within the same mtime granularity. */
+/* mtime folded with size so truncations/appends within the same mtime
+ * granularity still change the token. */
 int64_t get_file_mtime_token(const char *path)
 {
 #if defined(_WIN32)

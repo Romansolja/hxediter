@@ -23,8 +23,7 @@ int undo_pop(EditorState *state, UndoEntry *out)
     return 1;
 }
 
-/* Roll back a pop that couldn't complete (e.g. write failure).
- * Must be called immediately after the failed undo_pop. */
+/* Roll back a pop whose write failed. Must be called immediately after. */
 void undo_unpop(EditorState *state)
 {
     state->undo_head = (state->undo_head + 1) % UNDO_MAX;

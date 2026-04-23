@@ -102,8 +102,6 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
         ImGui::PopStyleColor();
     }
 
-    /* Download finished and verified — write the path back for the main
-     * loop to pick up and close the popup. */
     if (download_done && !snap.installer_path.empty() && out_installer_to_launch) {
         *out_installer_to_launch = snap.installer_path;
         ImGui::CloseCurrentPopup();
@@ -162,12 +160,8 @@ void RenderPerformanceSection(GuiState& s) {
 } /* anonymous namespace */
 
 void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
-    /* Debug-mode instrumentation: records per-frame state of the Updates
-     * animation into a ring buffer and renders a scrolling, selectable log
-     * in a separate window. Gated on s_show_debug, toggled via the Debug
-     * checkbox at the bottom of this popup. Recording is always on (the
-     * write is cheap) so there's always fresh history when you open the
-     * window. */
+    /* Per-frame ring buffer of the Updates animation state, surfaced via a
+     * separate log window when the Debug checkbox is on. */
     struct ScuffMetric {
         int   frame;
         float dt;
@@ -181,16 +175,12 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
     static bool        s_show_debug   = false;
 
     if (s_show_debug) {
-    /* Cap the max size to the main viewport so the window can never grow
-     * larger than what's visible, then clamp its position after Begin so
-     * dragging can't push it past the edges. Together these keep the X
-     * close button reachable regardless of where the user puts it. */
+    /* Size cap + post-Begin position clamp so the window (and its close-X)
+     * stay reachable regardless of where the user drags it. */
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSizeConstraints(ImVec2(240, 160), vp->WorkSize);
     ImGui::SetNextWindowSize(ImVec2(560, 560), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Updates Scuff Debug", &s_show_debug)) {
-        /* Clamp inside the main viewport. Must happen after Begin so we
-         * can read the current window size. */
         ImVec2 wpos  = ImGui::GetWindowPos();
         ImVec2 wsize = ImGui::GetWindowSize();
         ImVec2 lo    = vp->WorkPos;
@@ -202,9 +192,7 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
         if (clamped.x != wpos.x || clamped.y != wpos.y) {
             ImGui::SetWindowPos(clamped);
         }
-        /* Build a plain-text rendering of the ring buffer every frame. Using
-         * an InputTextMultiline (read-only) instead of a Text loop makes the
-         * log natively selectable and copyable. */
+        /* Read-only InputTextMultiline gives us free selection/copy. */
         static char s_log_text[8192];
         int pos = 0;
         for (int i = 0; i < 96; i++) {
@@ -242,27 +230,23 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
     ImGui::End();
     }  /* if (s_show_debug) */
 
-    /* Frameless floating tray pinned to the top-right, just below the
-     * toolbar row where the gear icon lives. BeginPopup (non-modal) means
-     * no backdrop dim and auto-close on any outside click — the rest of
-     * the editor stays fully interactive while the panel is open. */
-    constexpr float kPanelW   = 260.0f;
-    constexpr float kTopPad   = 34.0f;   /* clears toolbar + separator */
-    constexpr float kRightPad = 8.0f;    /* matches gear button inset */
+    /* Floating tray below the gear. Non-modal so the editor stays
+     * interactive; all literals scale with content_scale for HiDPI. */
+    const float kPanelW   = 260.0f * s.content_scale;
+    const float kTopPad   = 34.0f  * s.content_scale;
+    const float kRightPad = 8.0f   * s.content_scale;
 
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImVec2 anchor(vp->Pos.x + vp->Size.x - kPanelW - kRightPad,
                   vp->Pos.y + kTopPad);
     ImGui::SetNextWindowPos(anchor, ImGuiCond_Always);
-    /* Width locked at kPanelW; height auto-grows with the Updates accordion.
-     * Locking both min and max width breaks the AlwaysAutoResize chicken-
-     * and-egg with the child BeginChild (whose width is derived from the
-     * window's). */
+    /* Width locked, height auto-grows with the Updates accordion. */
     ImGui::SetNextWindowSizeConstraints(ImVec2(kPanelW, 0.0f),
                                         ImVec2(kPanelW, FLT_MAX));
 
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 8.0f * s.content_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(10.0f * s.content_scale, 10.0f * s.content_scale));
 
     if (!ImGui::BeginPopup("Settings##settings",
             ImGuiWindowFlags_AlwaysAutoResize |
@@ -274,10 +258,7 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
 
-    /* Animated "Appearance" section. Mirrors the Updates accordion below;
-     * its own statics calibrate a different natural height. Mono font is
-     * temporarily popped inside the body so prose labels and widget text
-     * render in Roboto. */
+    /* Accordion pattern shared with Performance/Updates below. */
     {
         static bool  appearance_open      = false;
         static float appearance_anim      = 0.0f;
@@ -321,8 +302,6 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
 
     ImGui::Spacing();
 
-    /* Animated "Performance" section. Mirrors the Appearance accordion
-     * pattern; currently hosts the single background-throttle toggle. */
     {
         static bool  perf_open      = false;
         static float perf_anim      = 0.0f;
@@ -366,26 +345,20 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
 
     ImGui::Spacing();
 
-    /* Animated "Updates" section. Starts collapsed; state persists across
-     * popup open/close within a session. The anim float drives both
-     * alpha and child-height so the body slides in while fading, and the
-     * outer popup (AlwaysAutoResize) grows with it. */
     static bool  updates_open = false;
     static float updates_anim = 0.0f;
-    static float content_h    = 140.0f;   /* calibrated on first full open */
+    static float content_h    = 140.0f;
 
     const float dt     = ImGui::GetIO().DeltaTime;
     const float target = updates_open ? 1.0f : 0.0f;
-    /* Exponential smoothing, framerate-independent. rate=8 → ~200ms feel. */
+    /* rate=8 → ~200 ms feel, framerate-independent. */
     const float rate = 8.0f;
     updates_anim += (target - updates_anim) * (1.0f - std::pow(0.1f, dt * rate));
     if (std::fabs(updates_anim - target) < 0.002f) updates_anim = target;
 
-    /* Zero ItemSpacing BEFORE the button. ImGui's ItemSize bakes
-     * ItemSpacing.y into the cursor advance at the END of each item using
-     * the style active at that moment — so the default ~4 px between
-     * button and the next item is reserved when the BUTTON finishes, not
-     * when the body starts. Pushing after the button was too late. */
+    /* Zero ItemSpacing BEFORE the button — ImGui bakes the spacing at the
+     * end of each item using the style active at that moment. Pushing
+     * after the button was too late. */
     const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
@@ -395,36 +368,19 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
     }
     ImGui::PopStyleVar();
 
-    /* Body layout: two modes.
-     *
-     *   Animating  (cur_h > 0.5 && anim < 1.0): plain Dummy of cur_h.
-     *       Nobody can read or click the content during the ~200 ms
-     *       transition, so we don't pay the layout-isolation cost that
-     *       clipping/BeginChild would demand. Popup auto-sizes to
-     *       padding + button + cur_h + padding.
-     *
-     *   Fully open (anim == 1.0): real content at natural height. Popup
-     *       auto-sizes to padding + button + content_natural + padding.
-     *       content_h is calibrated from the measured natural height so
-     *       that cur_h at anim=0.998 is within sub-pixel of content_h —
-     *       the transition between Dummy(cur_h) and content(natural) is
-     *       invisible at the snap-to-1.0 boundary.
-     *
-     * The gate on cur_h > 0.5 still guards the Shape A ↔ Shape B handoff
-     * at the end of collapse — that scuff fix is untouched by this. */
+    /* While animating, a plain Dummy of cur_h drives the popup's auto-size;
+     * at anim==1 we render the real content and calibrate content_h from
+     * the measured natural height so the Dummy→content handoff is
+     * sub-pixel invisible. */
     const float cur_h = content_h * updates_anim;
     if (cur_h > 0.5f) {
         if (updates_anim >= 1.0f) {
-            /* Restore natural ItemSpacing for the updates section's own
-             * widgets so they keep their normal vertical rhythm. */
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
             const float start_y = ImGui::GetCursorPosY();
             ImGui::Indent(4.0f);
             RenderUpdatesSection(s, out_installer_to_launch);
             ImGui::Unindent(4.0f);
             const float end_y = ImGui::GetCursorPosY();
-            /* Calibrate to the exact measured height so cur_h = content_h
-             * at full open matches the content's natural bottom. */
             content_h = end_y - start_y;
             ImGui::PopStyleVar();
         } else {
@@ -434,18 +390,10 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
 
     ImGui::PopStyleVar(); /* ItemSpacing */
 
-    /* Debug mode toggle. When on, a separate selectable-log window appears
-     * (see top of this function) showing per-frame animation metrics. A
-     * small Spacing() first so the checkbox doesn't butt directly against
-     * the Updates body, which has zero trailing item spacing. */
     ImGui::Spacing();
     ImGui::Checkbox("Debug", &s_show_debug);
 
-    /* === DEBUG: record metric for this frame, but only when updates_anim
-     * actually changed — so steady-state frames don't drown the log and the
-     * collapse shows up as a clean ~20-line transcript. popup_h is queried
-     * via GetWindowHeight inside the popup so it reflects what ImGui has
-     * committed as this popup's outer height for the current frame. */
+    /* Record only on change so steady-state frames don't flood the log. */
     {
         static float s_last_anim = -1.0f;
         if (updates_anim != s_last_anim) {
@@ -460,7 +408,6 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
             s_last_anim = updates_anim;
         }
     }
-    /* === END DEBUG === */
 
     if (s.mono_font) ImGui::PopFont();
     ImGui::EndPopup();

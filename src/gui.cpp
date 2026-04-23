@@ -48,8 +48,6 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
     /* F1 must work even when a text field is focused. */
     if (ImGui::IsKeyPressed(ImGuiKey_F1)) s.show_help = !s.show_help;
 
-    /* Click-outside dismissal for the help panel. Gated on show_help so
-     * it's a no-op once hidden. */
     if (s.show_help &&
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered() &&
@@ -57,10 +55,8 @@ void HandleShortcuts(ui::GuiState& s, HexEditorCore& core) {
         s.show_help = false;
     }
 
-    /* Ctrl + mouse wheel zooms the hex grid (Notepad-style). Runs before
-     * the WantTextInput gate — wheel is a mouse gesture and shouldn't be
-     * swallowed just because the Goto/Search field has focus. Consuming
-     * io.MouseWheel stops the same tick from also scrolling a child. */
+    /* Ctrl+wheel zoom runs before the WantTextInput gate — a mouse
+     * gesture shouldn't be swallowed just because a field has focus. */
     if (io.KeyCtrl && io.MouseWheel != 0.0f) {
         AdjustFontScale(s, (io.MouseWheel > 0.0f ? +1.0f : -1.0f)
                               * ui::layout::kFontScaleStep);
@@ -181,10 +177,8 @@ void RenderHexEditorUI(AppState state,
                        int drag_over_state) {
     auto& s = g_state;
 
-    /* Notepad-style zoom: Ctrl+= / Ctrl+- scale only the hex grid, not
-     * the toolbar / settings / status / tooltips. Scaling is applied per
-     * child window below via SetWindowFontScale; FontGlobalScale stays
-     * at 1.0 so UI chrome holds its size. */
+    /* Only the hex grid scales; toolbar/settings/status stay at 100%.
+     * Per-child SetWindowFontScale below; keep FontGlobalScale at 1.0. */
     ImGui::GetIO().FontGlobalScale = 1.0f;
 
     float dt = ImGui::GetIO().DeltaTime;
@@ -212,8 +206,7 @@ void RenderHexEditorUI(AppState state,
     const auto& pal = ui::theme::Active(s.palette);
     ui::theme::PushEditorStyle(pal);
 
-    /* Reset each frame; toolbar/grid re-set via IsItemActive so the
-     * contextual hint can follow keyboard focus. */
+    /* Reset each frame; toolbar/grid re-set via IsItemActive. */
     s.focus_field = (s.selected_byte >= 0) ? ui::GuiState::FOCUS_BYTE
                                            : ui::GuiState::FOCUS_NONE;
 
@@ -225,14 +218,11 @@ void RenderHexEditorUI(AppState state,
         return;
     }
 
-    /* Invariant: state == HexView implies core != nullptr — the main
-     * loop resets state to StartScreen on any failed load. */
+    /* Invariant: state == HexView implies core != nullptr. */
     HexEditorCore& core_ref = *core;
 
-    /* Once drift is noticed the flag latches until the user resolves it;
-     * we don't auto-clear, because the baseline would immediately rebase
-     * if reload fired without confirmation. Sticky status so the warning
-     * can't be missed while the user's attention is elsewhere. */
+    /* Latches until the user resolves it — auto-clearing would rebase the
+     * baseline without confirmation. Sticky status so it can't be missed. */
     if (!s.externally_modified && core_ref.HasExternalModification()) {
         s.externally_modified = true;
         s.SetStatus("File changed on disk", ui::GuiState::STATUS_WARN, true);
@@ -247,15 +237,11 @@ void RenderHexEditorUI(AppState state,
     ui::HexLayout layout =
         ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x, s.font_scale);
 
-    /* Header and body MUST share the same window.Pos.x — the
-     * SameLine(absolute_x) calls inside both renderers land on different
-     * pixels otherwise and the byte columns drift out from under the
-     * header labels. Zero WindowPadding keeps them aligned.
-     *
-     * SetWindowFontScale is applied to each child so only the hex content
-     * zooms; the toolbar/status rendered outside these children stay at
-     * 100%. Must be set inside the child window (it's per-window state),
-     * so it goes between BeginChild and the renderer call. */
+    /* Zero WindowPadding so header and body share window.Pos.x — the
+     * SameLine(absolute_x) calls in both would otherwise land on
+     * different pixels and the byte columns would drift out from under
+     * the header labels. SetWindowFontScale is per-window, so it must
+     * live between BeginChild and the renderer. */
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexheader",
                       ImVec2(0, 0),

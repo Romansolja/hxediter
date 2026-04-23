@@ -60,8 +60,7 @@ const Palette kDefault = {
     /* frame_border_size */ 1.0f,
 };
 
-/* Red/green axis shifted to blue/orange. Chrome stays neutral; only
- * semantic colors (status, search, bytes, primary buttons) move. */
+/* Red/green axis shifted to blue/orange; chrome stays neutral. */
 const Palette kDeuteranopia = {
     /* text             */ ImVec4(0.94f, 0.95f, 0.97f, 1.00f),
     /* text_disabled    */ ImVec4(0.62f, 0.66f, 0.74f, 1.00f),

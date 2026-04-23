@@ -16,7 +16,7 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImVec2 ts      = ImGui::CalcTextSize(text);
     ImVec2 padding = ImVec2(layout::kBadgePadX, layout::kBadgePadY);
     ImVec2 p0      = ImGui::GetCursorScreenPos();
-    /* Align badge baseline with AlignTextToFramePadding text on the same line. */
+    /* Baseline-align with AlignTextToFramePadding text on the same line. */
     float frame_pad_y = ImGui::GetStyle().FramePadding.y;
     p0.y += frame_pad_y - padding.y;
 
@@ -46,15 +46,13 @@ const char* GetContextualHint(const GuiState& s, const HexEditorCore& core) {
     return "Click any byte to edit, arrow keys to move, F1 for shortcuts";
 }
 
-/* Transparent close button with a custom-drawn X glyph, matching the quick-reference
- * panel's close affordance (see help_panel.cpp) so both sites read identically. */
+/* Matches help_panel.cpp's close affordance so both sites read identically. */
 static bool DismissButton(const char* id, float size,
                           const theme::Palette& pal, float alpha) {
     ImVec4 hover_c = pal.help_close_hover;  hover_c.w *= alpha;
     ImVec4 act_c   = pal.help_close_active; act_c.w   *= alpha;
     ImVec4 glyph   = pal.help_close_glyph;  glyph.w   *= alpha;
 
-    /* Center vertically on the current text line. */
     ImVec2 pos = ImGui::GetCursorScreenPos();
     float line_center = pos.y + ImGui::GetStyle().FramePadding.y
                       + ImGui::GetTextLineHeight() * 0.5f;
@@ -140,8 +138,7 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         ImGui::EndTooltip();
     }
 
-    /* Sticky messages pin until the user clicks x; non-sticky fade on a timer.
-     * Render inline so the subsequent budget pass starts from post-sticky space. */
+    /* Sticky messages pin until the user clicks x; non-sticky fade on a timer. */
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -175,10 +172,8 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         }
     }
 
-    /* Priority-budgeted tail. Rank (highest to lowest):
-     *   (a) sticky + dismiss — already rendered above, never dropped if active.
-     *   (b) startup metric, right-anchored — dropped first under pressure.
-     *   (c) contextual hint — truncates with ellipsis, dropped when <~3 chars fit. */
+    /* Priority tail: sticky (above) > startup metric > contextual hint.
+     * Hint truncates with ellipsis then drops when <~3 chars fit. */
     char metric[32];
     if (s.startup_measured)
         std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
@@ -190,7 +185,6 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
     float       hint_full = ImGui::CalcTextSize(hint).x;
     float       char_w    = ImGui::CalcTextSize("A").x;
 
-    /* Snap cursor to current line so avail reflects space remaining post-sticky. */
     ImGui::SameLine(0, 0);
     float line_start_x = ImGui::GetCursorPosX();
     float avail        = ImGui::GetContentRegionAvail().x;

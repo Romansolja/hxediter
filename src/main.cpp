@@ -2,7 +2,6 @@
 #include "gui.h"
 #include "app_state.h"
 #include "updater.h"
-#include "IconsFontAwesome6.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -23,10 +22,8 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <fstream>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -35,9 +32,8 @@ static bool FileExists(const std::string& path) {
     return f.good();
 }
 
-/* ImGui hard-asserts inside stb_truetype on garbage input (including
- * WOFF/WOFF2 files renamed to .ttf), so reject anything whose magic bytes
- * aren't a recognized TrueType/OpenType signature. */
+/* stb_truetype hard-asserts on garbage input (including WOFF/WOFF2 files
+ * renamed to .ttf); reject unrecognized magic up front. */
 static bool IsValidFontFile(const std::string& path) {
     std::ifstream f(path.c_str(), std::ios::binary);
     if (!f.good()) return false;
@@ -77,21 +73,16 @@ struct AppContext {
     std::string pending_path;
     std::string load_error;
     GLFWwindow* window = nullptr;
-    /* Empty unless the Settings popup has approved an update: absolute path
-     * to a downloaded-and-SHA-verified NSIS installer in %TEMP%. */
+    /* Set by Settings: absolute path to a SHA-verified installer in %TEMP%. */
     std::string installer_to_launch;
 #ifdef _WIN32
-    /* Flipped by our IDropTarget; read by the render loop each frame to
-     * decide whether to draw the drop-zone overlay. */
     platform::DragState drag_over = platform::DragState::None;
 #endif
 };
 
 #ifdef _WIN32
-/* Copy the installed updater helper to %TEMP% (NSIS can't delete a running
- * binary from $INSTDIR, so the helper must not run from its installed
- * location), then ShellExecute it with the installer path and our PID.
- * Returns true on successful spawn. */
+/* NSIS can't delete a running binary from $INSTDIR, so the helper must run
+ * from a copy in %TEMP%. */
 static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
                                 std::string& err_utf8) {
     wchar_t exe_path[MAX_PATH];
@@ -125,7 +116,6 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
         return false;
     }
 
-    /* Installer path may contain spaces — quote it. */
     int wide_n = MultiByteToWideChar(CP_UTF8, 0, installer_path_utf8.c_str(),
                                      (int)installer_path_utf8.size(), nullptr, 0);
     std::wstring winst(wide_n, L'\0');
@@ -133,6 +123,7 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
                         (int)installer_path_utf8.size(),
                         winst.data(), wide_n);
 
+    /* Installer path may contain spaces — quote it. */
     wchar_t args[MAX_PATH + 64];
     swprintf(args, MAX_PATH + 64, L"\"%s\" %lu",
              winst.c_str(), (unsigned long)GetCurrentProcessId());
@@ -168,7 +159,6 @@ int main(int argc, char* argv[]) {
             if (ReadonlyDefault()) ctx.core->ForceReadOnly();
             ctx.state = AppState::HexView;
         } catch (const std::exception& e) {
-            /* Fall through to the start screen with an error. */
             ctx.load_error = e.what();
             std::fprintf(stderr, "Error: %s\n", e.what());
         }
@@ -200,11 +190,9 @@ int main(int argc, char* argv[]) {
     glfwSwapInterval(1);
 
 #ifdef _WIN32
-    /* Replace GLFW's internal IDropTarget with ours so we get DragEnter /
-     * DragOver / DragLeave in addition to Drop. The custom target writes
-     * ctx.pending_path on drop, mirroring glfw_drop_callback's behavior,
-     * so the main loop's consumer is unchanged. OleInitialize is
-     * refcounted; safe even though GLFW already called it. */
+    /* Replace GLFW's IDropTarget with ours so we get DragEnter/Over/Leave
+     * in addition to Drop. OleInitialize is refcounted; safe even though
+     * GLFW already called it. */
     HWND hwnd = glfwGetWin32Window(window);
     OleInitialize(nullptr);
     RevokeDragDrop(hwnd);
@@ -220,12 +208,9 @@ int main(int argc, char* argv[]) {
 
     ImGui::StyleColorsDark();
 
-    /* HiDPI one-time bake: pull the window's content scale once, multiply
-     * every font load size by it, and scale all ImGui style metrics to
-     * match. Static (not reactive to mid-session monitor changes) — the
-     * font atlas is built once, so a second monitor at a different DPI
-     * requires a restart to re-rasterize. */
-    float content_scale = 1.0f;
+    /* HiDPI one-time bake. Not reactive to mid-session monitor moves —
+     * moving to a different DPI display requires restart to re-rasterize. */
+    float content_scale;
     {
         float sx = 1.0f, sy = 1.0f;
         glfwGetWindowContentScale(window, &sx, &sy);
@@ -277,10 +262,9 @@ int main(int argc, char* argv[]) {
         if (title_font) break;
     }
 
-    /* Narrow the FontAwesome glyph range to the codepoints we use: the full
-     * FA range at 96px blows past OpenGL's max texture size on many GPUs
-     * and crashes atlas construction. */
-    static const ImWchar fa_ranges[] = {
+    /* Full FA range at 96px blows past OpenGL's max texture size on many
+     * GPUs, so narrow to codepoints we actually use. */
+    static constexpr ImWchar fa_ranges[] = {
         0xf15b, 0xf15b,   /* ICON_FA_FILE */
         0
     };
@@ -291,10 +275,9 @@ int main(int argc, char* argv[]) {
     ImFont* icon_font = TryLoadFont(io,
         "assets/fonts/fa-solid-900.ttf", 96.0f * content_scale, &icon_cfg, fa_ranges);
 
-    /* Second, small-size FA atlas for toolbar icons (gear, future friends).
-     * Separate from the 96px atlas so each glyph renders at its correct
-     * visual size without per-button font scaling. */
-    static const ImWchar fa_small_ranges[] = {
+    /* Separate small-size FA atlas for toolbar icons — each glyph renders
+     * at its native size without per-button font scaling. */
+    static constexpr ImWchar fa_small_ranges[] = {
         0xf013, 0xf013,   /* ICON_FA_GEAR */
         0
     };
@@ -315,20 +298,14 @@ int main(int argc, char* argv[]) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
-    /* Kick off the GitHub releases check in a background thread (debounced
-     * to one real request per 6h via %LOCALAPPDATA%\HxEditer\update_state.json). */
     updater::InitAndMaybeCheck();
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     bool startup_measured = false;
 
     while (!glfwWindowShouldClose(window)) {
-        /* Background throttle: when the window is unfocused and the
-         * setting is on, block for up to ~66 ms waiting on events
-         * instead of spinning at vsync rate. Any queued event
-         * (mouse, keyboard, drag, focus) returns immediately, so the
-         * editor snaps back to full responsiveness the instant the
-         * user clicks in. */
+        /* Background throttle drops to ~15 FPS when unfocused; any queued
+         * event wakes it instantly. */
         if (BackgroundThrottle() &&
             !glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
             glfwWaitEventsTimeout(1.0 / 15.0);
@@ -337,9 +314,8 @@ int main(int argc, char* argv[]) {
         }
 
         /* Reset the old core *before* constructing the new one so the
-         * previous handle is closed before HexEditorCore's
-         * is_file_held_by_other_process probe runs. Trade-off: a failed
-         * load also closes the previously-open file. */
+         * previous handle is closed before is_file_held_by_other_process
+         * runs. Trade-off: a failed load also closes the previous file. */
         if (!ctx.pending_path.empty()) {
             std::string path = ctx.pending_path;
             ctx.pending_path.clear();
@@ -351,8 +327,6 @@ int main(int argc, char* argv[]) {
                 ctx.state = AppState::HexView;
                 std::string new_title = "hxediter — " + ctx.core->GetFilename();
                 glfwSetWindowTitle(window, new_title.c_str());
-                /* Drop input focus so the new file's first frame has
-                 * no ghost active item from the previous file. */
                 ImGui::ClearActiveID();
             } catch (const std::exception& e) {
                 ctx.load_error = e.what();
@@ -375,19 +349,12 @@ int main(int argc, char* argv[]) {
                           drag_over_state);
 
 #ifdef _WIN32
-        /* If the user dismissed the (non-modal) Settings popup mid-download,
-         * the popup won't write installer_to_launch when it completes. Pull
-         * the path directly from the updater module so the handoff fires
-         * regardless of popup visibility. */
+        /* Non-modal Settings popup can be dismissed mid-download; pull
+         * directly so the handoff fires regardless of popup visibility. */
         if (ctx.installer_to_launch.empty()) {
             updater::ConsumeInstallerPath(ctx.installer_to_launch);
         }
 
-        /* Settings popup has written a verified installer path here (or
-         * ConsumeInstallerPath just did). Spawn the helper (which waits
-         * for us to exit then elevates). If the spawn itself fails,
-         * surface the error through the updater module so the next
-         * Settings open shows it — do NOT close the window. */
         if (!ctx.installer_to_launch.empty()) {
             std::string err;
             if (LaunchUpdaterHelper(ctx.installer_to_launch, err)) {
@@ -417,9 +384,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    /* Signal in-flight updater threads to drop their results instead of
-     * writing back into module state that's about to be destroyed. Threads
-     * are detached; we don't join. */
+    /* Detached updater threads may still be running; signal them to drop
+     * results rather than writing into module state we're tearing down. */
     updater::RequestAbandon();
 
     ImGui_ImplOpenGL3_Shutdown();

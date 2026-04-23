@@ -15,8 +15,7 @@ static std::string WideToUtf8(const wchar_t* w) {
     return out;
 }
 
-/* Extract the first path from a CF_HDROP payload. Returns empty string on
- * any failure (not an HDROP, no files, stat failed). */
+/* First path from a CF_HDROP payload; empty on any failure. */
 static std::wstring FirstPathFromData(IDataObject* data) {
     FORMATETC fmt = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
     STGMEDIUM stg = {};
@@ -30,9 +29,8 @@ static std::wstring FirstPathFromData(IDataObject* data) {
             UINT len = DragQueryFileW(hdrop, 0, nullptr, 0);
             if (len > 0) {
                 result.resize(len);
-                /* DragQueryFile wants a buffer of len+1 to hold the
-                 * terminator; std::wstring guarantees a writable extra
-                 * null past data()+size(). */
+                /* DragQueryFile wants len+1 bytes for the terminator;
+                 * std::wstring has a writable null past data()+size(). */
                 DragQueryFileW(hdrop, 0, result.data(), len + 1);
             }
         }

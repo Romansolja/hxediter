@@ -17,8 +17,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    /* Smoothly fade the drop-zone overlay in/out. Shares the help-panel
-     * animation speed so UI transitions feel consistent. */
+    /* Fade the drop-zone overlay in/out at the help-panel animation speed. */
     {
         float target = (drag_over_state != 0) ? 1.0f : 0.0f;
         float t = ImGui::GetIO().DeltaTime * layout::kHelpAnimSpeed;
@@ -140,8 +139,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     if (s.ui_font) ImGui::PopFont();
 
-    /* Must be called every frame so the dialog window, once opened, has
-     * a chance to render. */
+    /* Must be called every frame for the dialog window to render. */
     ImVec2 dlg_min(560.0f, 360.0f);
     ImVec2 dlg_max(FLT_MAX, FLT_MAX);
     if (ImGuiFileDialog::Instance()->Display(
@@ -165,10 +163,8 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                                      origin.y + avail.y - metric_sz.y - pad));
     ImGui::TextDisabled("%s", metric);
 
-    /* Top-right read-only toggle — bare checkbox whose purpose is
-     * revealed by a hover tooltip. Binds to the same GuiState flag
-     * main.cpp consults via ReadonlyDefault() right after constructing
-     * a HexEditorCore. */
+    /* Top-right read-only toggle; main.cpp consults this via
+     * ReadonlyDefault() right after constructing a HexEditorCore. */
     const float box_h = ImGui::GetFrameHeight();
     ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - box_h - pad,
                                      origin.y + pad));

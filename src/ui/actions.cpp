@@ -85,8 +85,8 @@ void DoSearch(GuiState& s, HexEditorCore& core) {
 }
 
 void DoUndo(GuiState& s, HexEditorCore& core) {
-    /* An external writer may have touched the same offset since we
-     * recorded the undo entry — restoring old_val would clobber it. */
+    /* External writer may have touched the same offset; restoring old_val
+     * would clobber it. Gate through the conflict modal. */
     if (s.externally_modified) {
         s.conflict_modal_open = true;
         return;
@@ -116,8 +116,7 @@ void CommitEdit(GuiState& s, HexEditorCore& core) {
         return;
     }
 
-    /* If the file changed on disk, stash the edit and gate through the
-     * resolution modal instead of blind-overwriting. */
+    /* Stash the edit and gate through the modal instead of blind-overwriting. */
     if (s.externally_modified) {
         s.pending_edit_offset = s.selected_byte;
         s.pending_edit_value  = (unsigned char)v;

@@ -14,9 +14,8 @@ HexEditorCore::HexEditorCore(const std::string& filename)
             "Close it there first, then try again.");
     }
 
-    /* Close the probe handle immediately: Windows' share check is
-     * symmetric, so holding write access here would block external
-     * tools' saves even with _SH_DENYNO. */
+    /* Close the probe handle immediately — Windows' share check is
+     * symmetric; holding write access would block external tools' saves. */
     FILE* probe = open_file_shared(state_.filename, "rb+");
     if (probe != nullptr) {
         fclose(probe);
@@ -38,8 +37,8 @@ HexEditorCore::HexEditorCore(const std::string& filename)
         throw std::runtime_error("Cannot determine file size");
     }
 
-    /* -1 means stat failed: degrade to "no detection" rather than
-     * failing the open, since the file itself is readable. */
+    /* -1 means stat failed; degrade to "no detection" rather than fail
+     * the open, since the file itself is readable. */
     baseline_token_ = get_file_mtime_token(state_.filename);
 }
 
@@ -216,7 +215,7 @@ bool HexEditorCore::ReloadFromDisk()
     if (new_size < 0) return false;
     state_.file_size = new_size;
 
-    /* Clamp page offset so the caret isn't past EOF after a truncation. */
+    /* Clamp offset so the caret isn't past EOF after a truncation. */
     if (state_.page_offset >= state_.file_size) {
         state_.page_offset = (state_.file_size > 0)
             ? ((state_.file_size - 1) / PAGE_SIZE) * PAGE_SIZE

@@ -29,10 +29,9 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
 
     ImGui::AlignTextToFramePadding();
 
-    /* Responsive layout pass: pre-measure the fixed widths of every element
-     * and decide, based on the current window width, how wide the two input
-     * fields should be and which low-priority elements to drop. This keeps
-     * the toolbar from running under the right-anchored settings gear. */
+    /* Responsive pass: measure every element, then decide field widths and
+     * which low-priority elements to drop. Keeps the toolbar from running
+     * under the right-anchored settings gear. */
     auto textw = [](const char* t) { return ImGui::CalcTextSize(t).x; };
 
     const float w_nav_label  = textw("NAV");
@@ -88,15 +87,13 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
         goto_w   = std::max(goto_min,   goto_w   - overflow * goto_share);
         search_w = std::max(search_min, search_w - overflow * (1.0f - goto_share));
     }
-    /* Drop low-priority elements one at a time until it fits (or we run out). */
+    /* Drop low-priority elements one at a time until it fits. */
     if (compute_needed() > avail) show_undo         = false;
     if (compute_needed() > avail) show_find         = false;
     if (compute_needed() > avail) show_help         = false;
     if (compute_needed() > avail) show_search_label = false;
     if (compute_needed() > avail) show_jump_label   = false;
     if (compute_needed() > avail) show_search_group = false;
-
-    /* ---------- Render ---------- */
 
     ImGui::TextDisabled("NAV");
     ImGui::SameLine();
@@ -163,10 +160,8 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
 
     if (show_help) {
         ImGui::SameLine(0.0f, group_gap);
-        /* Glyph is always "?"; when the quick reference is up, paint the
-         * resting state with the hover tint so the button reads as "pressed"
-         * without a distinct label. Dismissing the panel returns it to the
-         * normal secondary style. */
+        /* While the quick reference is up, paint the resting state with
+         * the hover tint so the button reads as "pressed". */
         if (s.show_help) {
             ImGui::PushStyleColor(ImGuiCol_Button,        pal.btn_secondary_hover);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.btn_secondary_active);
@@ -190,15 +185,13 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
         }
     }
 
-    /* Gear/Settings button pinned to the far right. Drawn manually via
-     * InvisibleButton + DrawList so the glyph is pixel-centered — the
-     * default ImGui::Button layout uses the font's advance metrics, which
-     * leaves FontAwesome glyphs slightly off-center in a square button.
-     * Teal accent separates it visually from the editor-action buttons. */
+    /* InvisibleButton + DrawList so the gear glyph is pixel-centered;
+     * ImGui::Button uses font advance metrics and leaves FA glyphs
+     * slightly off-center in a square button. */
     const bool  have_icon = (s.icon_font_small != nullptr);
     const float size      = ImGui::GetFrameHeight();
-    const float btn_w     = have_icon ? size : 80.0f;
-    const float pad       = 8.0f;
+    const float btn_w     = have_icon ? size : 80.0f * s.content_scale;
+    const float pad       = 8.0f * s.content_scale;
     const float desired_x = ImGui::GetWindowContentRegionMax().x - btn_w - pad;
     const float current_x = ImGui::GetCursorPosX();
     if (desired_x > current_x) ImGui::SameLine(desired_x);
@@ -206,21 +199,15 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
 
     if (have_icon) {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        /* Sample popup state before the click is processed — if the
-         * non-modal popup is open, BeginPopup's click-outside handling
-         * will close it this frame, so swallow the reopen to keep the
-         * gear feeling like a proper toggle instead of a flicker. */
+        /* Sample before the click: BeginPopup's click-outside closes this
+         * frame, so a click on the gear while open should toggle off, not
+         * re-open. */
         const bool popup_open = ImGui::IsPopupOpen("Settings##settings");
         const bool clicked = ImGui::InvisibleButton("##settings", ImVec2(size, size));
         const bool hovered = ImGui::IsItemHovered();
         const bool active  = ImGui::IsItemActive();
         if (clicked && !popup_open) s.show_settings = true;
 
-        /* JetBrains-IDE feel: no background at rest — the gear floats on
-         * the toolbar like an icon, not a button. A subtle white-alpha
-         * tint appears on hover, and a slightly stronger one while held.
-         * Pushed zero-alpha NavHighlight defensively so nav focus after
-         * a click doesn't paint a ring on mouse-back-over. */
         ImU32 bg = 0;
         if      (active)  bg = IM_COL32(255, 255, 255, 34);
         else if (hovered) bg = IM_COL32(255, 255, 255, 20);
@@ -234,16 +221,14 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
         const ImVec2 tsz = ImGui::CalcTextSize(ICON_FA_GEAR);
         const ImVec2 tp(pos.x + (size - tsz.x) * 0.5f,
                         pos.y + (size - tsz.y) * 0.5f);
-        /* Slightly brighter on hover so the glyph reads as "responsive". */
         const ImU32 glyph = hovered ? IM_COL32(215, 220, 228, 255)
                                     : IM_COL32(168, 174, 182, 220);
         dl->AddText(tp, glyph, ICON_FA_GEAR);
         ImGui::PopFont();
 
         if (hovered) {
-            /* Mirror the Settings popup's frame: rounded corners and the
-             * mono font. SetTooltip would render with the default frame
-             * style, which visually disagrees with the panel it launches. */
+            /* Mirror the Settings popup frame so the tooltip agrees
+             * visually with the panel it launches. */
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 4));
             ImGui::BeginTooltip();

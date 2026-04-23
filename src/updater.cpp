@@ -1,7 +1,5 @@
 #include "updater.h"
 
-/* _WIN32_WINNT is needed by winhttp.h for the options and flags we use.
- * Scoped to this TU so it doesn't leak into other headers. */
 #ifndef _WIN32_WINNT
 #  define _WIN32_WINNT 0x0601
 #endif
@@ -41,31 +39,29 @@ namespace updater {
 
 namespace {
 
-/* ----- configuration ----- */
-
 constexpr const char* kRepoOwner = "Romansolja";
 constexpr const char* kRepoName  = "hxediter";
-/* WIDEN(X) forces the narrow APP_VERSION string literal to a wide literal
- * for concatenation into the WinHTTP UA (mixing L"a" "b" is compiler-
- * dependent; this is portable). */
+/* Force APP_VERSION to a wide literal for UA concatenation; mixing L"a" "b"
+ * is compiler-dependent. */
 #define UPDATER_WIDEN_INNER(x) L##x
 #define UPDATER_WIDEN(x) UPDATER_WIDEN_INNER(x)
 constexpr const wchar_t* kUserAgent = L"hxediter/" UPDATER_WIDEN(APP_VERSION);
-constexpr int64_t kDebounceSeconds = 6 * 60 * 60;  /* 6 hours */
+constexpr int64_t kDebounceSeconds = 6 * 60 * 60;
 
-/* ----- shared state ----- */
+/* Hard caps so a malicious or misbehaving server can't exhaust memory or
+ * disk. GitHub releases JSON is ~10KB; installers are under 20MB. */
+constexpr size_t   kMaxJsonBytes      = 4 * 1024 * 1024;
+constexpr uint64_t kMaxInstallerBytes = 200ull * 1024 * 1024;
 
 std::mutex g_mx;
 Snapshot   g_snap;
 
-/* shared_ptr so a worker thread that outlives the main thread still has a
- * valid flag to read. RequestAbandon() flips it; workers check before writes. */
+/* shared_ptr so a worker outliving the main thread still has a valid flag
+ * to read. RequestAbandon() flips it; workers check before writes. */
 std::shared_ptr<std::atomic<bool>> g_abandon = std::make_shared<std::atomic<bool>>(false);
 
 std::atomic<bool> g_check_in_flight{false};
 std::atomic<bool> g_download_in_flight{false};
-
-/* ----- small utilities ----- */
 
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return L"";
@@ -85,7 +81,6 @@ std::string WideToUtf8(const std::wstring& w) {
     return s;
 }
 
-/* Writes to g_snap under g_mx. Cheap — never blocks workers for long. */
 template <typename F>
 void WithSnap(F&& f) {
     std::lock_guard<std::mutex> lk(g_mx);
@@ -93,8 +88,6 @@ void WithSnap(F&& f) {
 }
 
 bool AbandonRequested() { return g_abandon->load(); }
-
-/* ----- version parsing ----- */
 
 std::optional<std::tuple<int,int,int>> ParseVersion(const std::string& raw) {
     const char* p = raw.c_str();
@@ -106,7 +99,7 @@ std::optional<std::tuple<int,int,int>> ParseVersion(const std::string& raw) {
         int n = 0;
         while (*p >= '0' && *p <= '9') {
             n = n * 10 + (*p - '0');
-            if (n > 1'000'000) return std::nullopt;  /* nonsense guard */
+            if (n > 1'000'000) return std::nullopt;
             ++p;
         }
         parts[i++] = n;
@@ -123,8 +116,6 @@ int CompareVersions(const std::tuple<int,int,int>& a,
     return 0;
 }
 
-/* ----- %LOCALAPPDATA%\HxEditer paths ----- */
-
 std::wstring LocalAppDataDir() {
     PWSTR path = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path))) {
@@ -134,7 +125,7 @@ std::wstring LocalAppDataDir() {
     std::wstring dir = path;
     CoTaskMemFree(path);
     dir += L"\\HxEditer";
-    CreateDirectoryW(dir.c_str(), nullptr);  /* ok if it exists */
+    CreateDirectoryW(dir.c_str(), nullptr);
     return dir;
 }
 
@@ -183,8 +174,6 @@ void SaveLastCheckUnix(int64_t v) {
     if (out) out << j.dump();
 }
 
-/* ----- WinHTTP wrappers ----- */
-
 struct HSession { HINTERNET h = nullptr; ~HSession() { if (h) WinHttpCloseHandle(h); } };
 struct HConn    { HINTERNET h = nullptr; ~HConn()    { if (h) WinHttpCloseHandle(h); } };
 struct HReq     { HINTERNET h = nullptr; ~HReq()     { if (h) WinHttpCloseHandle(h); } };
@@ -195,7 +184,7 @@ bool OpenSession(HSession& out) {
                         WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!out.h) return false;
-    /* Enable TLS 1.2 + 1.3 explicitly (default is TLS 1.0 on older Win10). */
+    /* Default on older Win10 is TLS 1.0; pin to 1.2+. */
     DWORD secure = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 #ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
     secure |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
@@ -207,7 +196,7 @@ bool OpenSession(HSession& out) {
 
 struct ParsedUrl {
     std::wstring host;
-    std::wstring path;   /* includes query */
+    std::wstring path;
     INTERNET_PORT port = 0;
     bool secure = false;
 };
@@ -226,8 +215,6 @@ bool CrackUrl(const std::wstring& url, ParsedUrl& out) {
     return true;
 }
 
-/* Opens a request already wired with cache-bypass and always-follow-redirect
- * policy. Caller sends + receives + reads. */
 bool OpenRequest(HSession& sess, const ParsedUrl& u, HConn& conn, HReq& req) {
     conn.h = WinHttpConnect(sess.h, u.host.c_str(), u.port, 0);
     if (!conn.h) return false;
@@ -240,8 +227,7 @@ bool OpenRequest(HSession& sess, const ParsedUrl& u, HConn& conn, HReq& req) {
     DWORD redir = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(req.h, WINHTTP_OPTION_REDIRECT_POLICY, &redir, sizeof(redir));
 
-    /* Cache-bypass headers — without these, upstream proxies or connection
-     * caches can serve stale "you're up to date" responses. */
+    /* Without these, upstream proxies can serve stale "you're up to date". */
     const wchar_t* no_cache =
         L"Cache-Control: no-cache, no-store, max-age=0\r\n"
         L"Pragma: no-cache\r\n"
@@ -251,8 +237,6 @@ bool OpenRequest(HSession& sess, const ParsedUrl& u, HConn& conn, HReq& req) {
     return true;
 }
 
-/* GET url → out_body. On success returns true; on failure, writes a
- * short reason into err. */
 bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& err) {
     ParsedUrl u;
     if (!CrackUrl(url, u)) { err = "bad url"; return false; }
@@ -262,8 +246,7 @@ bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& 
     if (!OpenRequest(sess, u, conn, req)) { err = "WinHttpOpenRequest failed"; return false; }
 
     if (!WinHttpSendRequest(req.h, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0,
-                            0 /* context */)) {
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
         err = "WinHttpSendRequest failed"; return false;
     }
     if (!WinHttpReceiveResponse(req.h, nullptr)) {
@@ -286,6 +269,10 @@ bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& 
         DWORD avail = 0;
         if (!WinHttpQueryDataAvailable(req.h, &avail)) { err = "QueryDataAvailable failed"; return false; }
         if (avail == 0) break;
+        if (out_body.size() + avail > kMaxJsonBytes) {
+            err = "response too large";
+            return false;
+        }
         size_t old = out_body.size();
         out_body.resize(old + avail);
         DWORD got = 0;
@@ -298,7 +285,6 @@ bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& 
     return true;
 }
 
-/* Streams a GET to a file, calling progress() every ~256 KB. */
 bool HttpDownloadToFile(const std::wstring& url,
                        const std::wstring& dest_path,
                        std::string& err) {
@@ -328,7 +314,7 @@ bool HttpDownloadToFile(const std::wstring& url,
         return false;
     }
 
-    /* Parse Content-Length if present (may be missing on chunked responses). */
+    /* Content-Length may be absent on chunked responses; zero is fine. */
     uint64_t total = 0;
     {
         wchar_t lenbuf[32] = {0}; DWORD lsz = sizeof(lenbuf);
@@ -337,6 +323,10 @@ bool HttpDownloadToFile(const std::wstring& url,
                                 lenbuf, &lsz, WINHTTP_NO_HEADER_INDEX)) {
             total = (uint64_t)_wtoi64(lenbuf);
         }
+    }
+    if (total > kMaxInstallerBytes) {
+        err = "installer exceeds max allowed size";
+        return false;
     }
     WithSnap([&](Snapshot& s) { s.bytes_total = total; s.bytes_received = 0; });
 
@@ -359,6 +349,12 @@ bool HttpDownloadToFile(const std::wstring& url,
             DWORD got = 0;
             if (!WinHttpReadData(req.h, buf.data(), want, &got) || got == 0) {
                 CloseHandle(file); err = "ReadData failed"; return false;
+            }
+            if (got_total + got > kMaxInstallerBytes) {
+                CloseHandle(file);
+                DeleteFileW(dest_path.c_str());
+                err = "installer exceeds max allowed size";
+                return false;
             }
             DWORD written = 0;
             if (!WriteFile(file, buf.data(), got, &written, nullptr) || written != got) {
@@ -385,8 +381,6 @@ bool HttpDownloadToFile(const std::wstring& url,
     });
     return true;
 }
-
-/* ----- SHA256 via BCrypt ----- */
 
 std::string HexLower(const uint8_t* data, size_t n) {
     static const char hex[] = "0123456789abcdef";
@@ -438,7 +432,7 @@ std::optional<std::string> ComputeSha256(const std::wstring& path) {
     return HexLower(out.data(), out.size());
 }
 
-/* sha256sum format: "<64-hex>  <filename>\n" (one or more spaces between). */
+/* sha256sum format: "<64-hex>  <filename>\n". */
 std::optional<std::string> ExtractExpectedSha(const std::string& sums_body,
                                               const std::string& wanted_filename) {
     std::stringstream ss(sums_body);
@@ -451,7 +445,6 @@ std::optional<std::string> ExtractExpectedSha(const std::string& sums_body,
         std::string hex = line.substr(0, 64);
         while (i < line.size() && (line[i] == ' ' || line[i] == '\t' || line[i] == '*')) ++i;
         std::string name = line.substr(i);
-        /* Trim trailing CR/LF/whitespace. */
         while (!name.empty() && (name.back() == '\r' || name.back() == '\n' ||
                                  name.back() == ' ' || name.back() == '\t')) {
             name.pop_back();
@@ -460,8 +453,6 @@ std::optional<std::string> ExtractExpectedSha(const std::string& sums_body,
     }
     return std::nullopt;
 }
-
-/* ----- release JSON extraction ----- */
 
 struct ReleaseInfo {
     std::string tag_name;
@@ -483,7 +474,6 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
             std::string name = a.value("name", "");
             std::string url  = a.value("browser_download_url", "");
             if (name.empty() || url.empty()) continue;
-            /* Match HxEditer-*-win64.exe for the installer. */
             if (name.size() > 10 &&
                 name.rfind("HxEditer-", 0) == 0 &&
                 name.find("-win64.exe") != std::string::npos) {
@@ -500,8 +490,6 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
         return std::nullopt;
     }
 }
-
-/* ----- worker bodies ----- */
 
 void DoCheck(bool force) {
     (void)force;
@@ -585,8 +573,8 @@ void DoDownload() {
         snap = s;
     });
 
-    /* Re-fetch the release to get fresh URLs (browser_download_url may have
-     * a short-lived redirect token). Also lets us pick up SHA256SUMS. */
+    /* Re-fetch: browser_download_url carries short-lived redirect tokens,
+     * and we need a fresh SHA256SUMS reference. */
     std::string api_url_u8 = std::string("https://api.github.com/repos/")
         + kRepoOwner + "/" + kRepoName + "/releases/latest";
     std::string body; std::string err;
@@ -633,8 +621,8 @@ void DoDownload() {
         return;
     }
 
-    /* Derive target %TEMP% path from the parsed latest version, not the
-     * tag — avoids stray 'v' or pre-release suffix in the filename. */
+    /* Derive from parsed version so no stray 'v' or pre-release suffix
+     * lands in the filename. */
     auto ours = ParseVersion(rel_info->tag_name);
     if (!ours) {
         WithSnap([&](Snapshot& s) {
@@ -693,8 +681,6 @@ void DoDownload() {
 
 } /* anonymous namespace */
 
-/* ----- public API ----- */
-
 void InitAndMaybeCheck() {
     int64_t last = LoadLastCheckUnix();
     int64_t now  = NowUnix();
@@ -732,9 +718,8 @@ bool ConsumeInstallerPath(std::string& out_path) {
     if (g_snap.download != DownloadState::Complete) return false;
     if (g_snap.installer_path.empty())               return false;
     out_path = std::move(g_snap.installer_path);
-    /* Reset so subsequent frames don't re-trigger the handoff. Keep the
-     * check-state ("UpdateAvailable"/"UpToDate") so the UI still reflects
-     * that a newer version exists while the installer runs. */
+    /* Keep check-state so the UI still reflects "new version exists" while
+     * the installer runs. */
     g_snap.download       = DownloadState::Idle;
     g_snap.bytes_received = 0;
     g_snap.bytes_total    = 0;

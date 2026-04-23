@@ -6,13 +6,9 @@
 namespace ui {
 
 void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
-    /* Combine the user's font zoom with the one-time HiDPI multiplier so
-     * every hardcoded pixel constant (panel width, padding, close-X size)
-     * stays proportional on 4K panels. */
+    /* Combined font zoom + HiDPI multiplier so pixel constants stay
+     * proportional on 4K. */
     const float scale = s.font_scale * s.content_scale;
-
-    float remaining = ImGui::GetContentRegionAvail().y;
-    if (remaining < 90.0f * scale) return;
 
     const char* lines[] = {
         "Quick reference",
@@ -42,24 +38,23 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
     float panel_h = pad_y * 2 + line_h * (float)n;
     float shown_h = panel_h * visibility;
 
-    if (shown_h > remaining - 8.0f || shown_h < 20.0f) return;
+    if (shown_h < 20.0f) return;
 
-    /* Vertical centering within the remaining space below the hex content,
-     * mirrored from start_screen.cpp. Keeps a 12*scale minimum top gap so
-     * the panel never butts against the last byte row on a tight page. */
-    const float min_top = 12.0f * scale;
-    float v_pad = (remaining - shown_h) * 0.5f;
-    if (v_pad < min_top) v_pad = min_top;
-    ImGui::Dummy(ImVec2(0, v_pad));
+    /* Center in the hex view's visible rect (screen-space) so the panel
+     * stays put as rows fill the page or the user scrolls. */
+    const ImVec2 win_pos  = ImGui::GetWindowPos();
+    const ImVec2 win_size = ImGui::GetWindowSize();
+    const float  margin   = 16.0f * scale;
+    if (win_size.x < panel_w + margin) return;
+    if (win_size.y < shown_h + margin) return;
 
-    float avail_w = ImGui::GetContentRegionAvail().x;
-    float indent  = (avail_w > panel_w) ? (avail_w - panel_w) * 0.5f : 0.0f;
-    if (indent > 0.0f) ImGui::Indent(indent);
+    const ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
 
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
+    ImVec2 p0(win_pos.x + (win_size.x - panel_w) * 0.5f,
+              win_pos.y + (win_size.y - shown_h) * 0.5f);
     ImVec2 p1(p0.x + panel_w, p0.y + shown_h);
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
 
     dl->AddRectFilled(ImVec2(p0.x + 4.0f * scale, p0.y + 5.0f * scale),
                       ImVec2(p1.x + 6.0f * scale, p1.y + 8.0f * scale),
@@ -114,7 +109,6 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
             ImGui::TextUnformatted(lines[i]);
             ImGui::PopStyleColor();
         } else if (lines[i][0] == '\0') {
-            /* spacer row */
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, body_c);
             ImGui::TextUnformatted(lines[i]);
@@ -122,13 +116,8 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         }
     }
 
-    ImGui::SetCursorScreenPos(ImVec2(p0.x, p1.y + 4.0f * scale));
-    /* Register the manually-moved cursor with ImGui's layout bookkeeping;
-     * without this the next widget can trip a cursor assertion and the
-     * panel won't contribute to content size for scrolling. */
-    ImGui::Dummy(ImVec2(0.0f, 0.0f));
-
-    if (indent > 0.0f) ImGui::Unindent(indent);
+    /* Restore cursor so subsequent widgets don't lay out from inside the panel. */
+    ImGui::SetCursorScreenPos(saved_cursor);
 }
 
 } /* namespace ui */
