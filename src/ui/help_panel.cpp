@@ -19,7 +19,7 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         "  F2                   Start editing byte under caret",
         "  Enter                Commit edit",
         "  Esc                  Cancel edit",
-        "  PgUp / PgDn          Previous / next page",
+        "  PgUp / PgDn          Move caret one screen",
         "  Ctrl+Z               Undo last edit",
         "  Ctrl+= / Ctrl+-      Scale font up / down",
         "  Ctrl+wheel           Scale font (mouse)",

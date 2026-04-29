@@ -1,7 +1,11 @@
 #include "hex_editor_core.h"
 #include "gui.h"
 #include "app_state.h"
+#include "path_utils.h"
 #include "updater.h"
+
+#include "triage/classifier.h"
+#include "triage/scanner.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -20,11 +24,16 @@
 #  include "win_drop_target.h"
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
+#include <system_error>
+#include <unordered_set>
 #include <vector>
 
 static bool FileExists(const std::string& path) {
@@ -68,17 +77,85 @@ static void glfw_error_callback(int error, const char* description) {
 }
 
 struct AppContext {
-    AppState state = AppState::StartScreen;
-    std::unique_ptr<HexEditorCore> core;
-    std::string pending_path;
-    std::string load_error;
-    GLFWwindow* window = nullptr;
+    AppState                  state = AppState::StartScreen;
+    std::vector<OpenDocument> docs;
+    int                       active_doc      = -1;
+    int                       last_titled_doc = -2;   /* sentinel: forces first-frame title set */
+    std::vector<std::string>  pending_paths;
+    std::vector<int>          close_indices;          /* filled by gui; consumed in main */
+    /* Folders dropped or passed on the CLI land here instead of being
+     * recursively expanded into pending_paths. The main loop drains this
+     * vector once per frame, replaces directory_files with the new
+     * listing, and updates directory_label. */
+    std::vector<std::string>  pending_directories;
+    /* Files in the most-recently-loaded folder, sorted alphabetically.
+     * Surfaced in the tab-bar dropdown so the user can pick which file(s)
+     * to actually open as tabs — folder drops no longer auto-open every
+     * file. */
+    std::vector<std::string>  directory_files;
+    std::string               directory_label;        /* basename for the dropdown header */
+    /* Folder paths from the start screen's "Triage Folder..." button.
+     * Drained each frame; non-empty triggers transition to FolderTriage
+     * state and a triage::StartScan call. */
+    std::vector<std::string>  pending_triage_root;
+    /* Canonical paths of every doc in `docs`. Mirrors docs membership; kept
+     * in sync on every push_back / erase. Backs O(1) "is this file already
+     * open?" checks during a multi-file drop — pairwise filesystem::equivalent
+     * was O(N*M) and froze the UI past a few hundred paths. */
+    std::unordered_set<std::string> open_canonical;
+    std::string               load_error;
+    GLFWwindow*               window = nullptr;
     /* Set by Settings: absolute path to a SHA-verified installer in %TEMP%. */
-    std::string installer_to_launch;
+    std::string               installer_to_launch;
 #ifdef _WIN32
-    platform::DragState drag_over = platform::DragState::None;
+    platform::DragState       drag_over = platform::DragState::None;
 #endif
 };
+
+/* Returns a stable string key per file — weakly_canonical handles
+ * relative paths, case differences, and intermediate symlinks. Errors
+ * fall back to the original path (still better than nothing for dedup).
+ * TODO: this fires once per dropped path. With kMaxOpenDocs=200 the cost
+ * is bounded; if the cap is ever raised much higher, batch the canonical
+ * resolution or memoize against the input string. */
+static std::string CanonicalKey(const std::string& utf8_path) {
+    std::error_code ec;
+    auto canon = std::filesystem::weakly_canonical(PathFromUtf8(utf8_path), ec);
+    if (ec) return utf8_path;
+    return PathToUtf8(canon);
+}
+
+/* Linear scan to recover the doc index corresponding to a canonical key.
+ * Only used when refocusing an already-open file (rare path). */
+static int FindDocByCanonical(const std::vector<OpenDocument>& docs,
+                              const std::string& canonical_key) {
+    for (int i = 0; i < (int)docs.size(); ++i) {
+        if (!docs[i].core) continue;
+        if (CanonicalKey(docs[i].core->GetFilename()) == canonical_key) return i;
+    }
+    return -1;
+}
+
+static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
+    auto* ctx = static_cast<AppContext*>(glfwGetWindowUserPointer(w));
+    if (ctx == nullptr || count <= 0) return;
+    for (int i = 0; i < count; ++i) {
+        const char* p = paths[i];
+        if (!p) continue;
+        std::error_code ec;
+        std::filesystem::path fsp = PathFromUtf8(p);
+        auto status = std::filesystem::status(fsp, ec);
+        if (ec) continue;
+        if (std::filesystem::is_directory(status)) {
+            /* Folder drops surface a directory listing in the tab-bar
+             * dropdown; the user explicitly clicks files to open. */
+            ctx->pending_directories.push_back(p);
+        } else if (std::filesystem::is_regular_file(status)) {
+            ctx->pending_paths.push_back(p);
+        }
+    }
+    glfwFocusWindow(w);
+}
 
 #ifdef _WIN32
 /* NSIS can't delete a running binary from $INSTDIR, so the helper must run
@@ -139,13 +216,55 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
     }
     return true;
 }
+
+/* `argv` on Windows is the system ANSI code page (typically CP1252), not
+ * UTF-8 — non-ASCII paths from "Open with…" or `cmd` would silently
+ * mangle. Re-fetch from the wide command line. */
+static std::vector<std::string> CollectUtf8Args() {
+    std::vector<std::string> out;
+    int wc = 0;
+    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wc);
+    if (!wargv) return out;
+    for (int i = 1; i < wc; ++i) {  /* skip exe name */
+        int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
+                                    nullptr, 0, nullptr, nullptr);
+        if (n <= 1) continue;
+        std::string s(n - 1, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
+                            s.data(), n, nullptr, nullptr);
+        out.push_back(std::move(s));
+    }
+    LocalFree(wargv);
+    return out;
+}
 #endif
 
-static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
-    auto* ctx = static_cast<AppContext*>(glfwGetWindowUserPointer(w));
-    if (ctx == nullptr || count <= 0) return;
-    ctx->pending_path = paths[0];
-    glfwFocusWindow(w);
+static std::string BuildBatchError(const std::string& first, int additional) {
+    if (first.empty()) return std::string();
+    if (additional <= 0) return first;
+    char suffix[48];
+    std::snprintf(suffix, sizeof(suffix), " (and %d more)", additional);
+    return first + suffix;
+}
+
+static void UpdateWindowTitle(AppContext& ctx) {
+    std::string title;
+    if (ctx.state == AppState::HexView &&
+        ctx.active_doc >= 0 &&
+        ctx.active_doc < (int)ctx.docs.size() &&
+        ctx.docs[ctx.active_doc].core) {
+        title = "hxediter — " + ctx.docs[ctx.active_doc].core->GetFilename();
+    } else {
+        title = "hxediter";
+    }
+    glfwSetWindowTitle(ctx.window, title.c_str());
+}
+
+/* Map AppContext state -> the index that drives the window title. -1 stands
+ * in for any non-HexView state; we only have to call glfwSetWindowTitle
+ * when this target changes. */
+static int TitleTargetIndex(const AppContext& ctx) {
+    return (ctx.state == AppState::HexView) ? ctx.active_doc : -1;
 }
 
 int main(int argc, char* argv[]) {
@@ -153,14 +272,28 @@ int main(int argc, char* argv[]) {
 
     AppContext ctx;
 
-    if (argc >= 2) {
-        try {
-            ctx.core = std::make_unique<HexEditorCore>(argv[1]);
-            if (ReadonlyDefault()) ctx.core->ForceReadOnly();
-            ctx.state = AppState::HexView;
-        } catch (const std::exception& e) {
-            ctx.load_error = e.what();
-            std::fprintf(stderr, "Error: %s\n", e.what());
+    /* CLI args: each argument is a file or directory; directories are
+     * expanded recursively. Same code path as a multi-file drag-drop. */
+    std::vector<std::string> utf8_args;
+#ifdef _WIN32
+    utf8_args = CollectUtf8Args();
+    (void)argc; (void)argv;
+#else
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i]) utf8_args.emplace_back(argv[i]);
+    }
+#endif
+    for (const std::string& a : utf8_args) {
+        std::error_code ec;
+        std::filesystem::path fsp = PathFromUtf8(a);
+        auto status = std::filesystem::status(fsp, ec);
+        if (ec) continue;
+        if (std::filesystem::is_directory(status)) {
+            /* Mirror drag-drop behavior: directories populate the
+             * dropdown listing rather than auto-opening every file. */
+            ctx.pending_directories.push_back(a);
+        } else if (std::filesystem::is_regular_file(status)) {
+            ctx.pending_paths.push_back(a);
         }
     }
 
@@ -174,10 +307,13 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    /* Start maximized so 1280x720 doesn't look like a postage stamp on
+     * 4K / ultrawide. The OS still draws normal window chrome — user can
+     * un-maximize via the title-bar button. */
+    glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
-    std::string title = ctx.core ? ("hxediter — " + ctx.core->GetFilename())
-                                  : std::string("hxediter");
-    GLFWwindow* window = glfwCreateWindow(1280, 720, title.c_str(), nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "hxediter",
+                                          nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "Failed to create GLFW window\n");
         glfwTerminate();
@@ -197,7 +333,9 @@ int main(int argc, char* argv[]) {
     OleInitialize(nullptr);
     RevokeDragDrop(hwnd);
     platform::WinDropTarget* drop_target =
-        new platform::WinDropTarget(&ctx.drag_over, &ctx.pending_path);
+        new platform::WinDropTarget(&ctx.drag_over,
+                                    &ctx.pending_paths,
+                                    &ctx.pending_directories);
     RegisterDragDrop(hwnd, drop_target);
 #endif
 
@@ -279,6 +417,8 @@ int main(int argc, char* argv[]) {
      * at its native size without per-button font scaling. */
     static constexpr ImWchar fa_small_ranges[] = {
         0xf013, 0xf013,   /* ICON_FA_GEAR */
+        0xf078, 0xf078,   /* ICON_FA_CHEVRON_DOWN */
+        0xf802, 0xf802,   /* ICON_FA_FOLDER_TREE */
         0
     };
     ImFontConfig icon_small_cfg;
@@ -313,25 +453,129 @@ int main(int argc, char* argv[]) {
             glfwPollEvents();
         }
 
-        /* Reset the old core *before* constructing the new one so the
-         * previous handle is closed before is_file_held_by_other_process
-         * runs. Trade-off: a failed load also closes the previous file. */
-        if (!ctx.pending_path.empty()) {
-            std::string path = ctx.pending_path;
-            ctx.pending_path.clear();
-            ctx.core.reset();
-            try {
-                ctx.core = std::make_unique<HexEditorCore>(path);
-                if (ReadonlyDefault()) ctx.core->ForceReadOnly();
-                ctx.load_error.clear();
+        /* Drain pending directories: replace the dropdown listing with the
+         * latest folder's contents. If multiple folders were dropped at
+         * once we keep only the last — picking from N parallel listings in
+         * a single dropdown would be confusing. Transitions to HexView so
+         * the toolbar/dropdown render even with no docs open. */
+        if (!ctx.pending_directories.empty()) {
+            std::vector<std::string> dirs;
+            dirs.swap(ctx.pending_directories);
+            const std::string& chosen = dirs.back();
+            std::vector<std::string> files;
+            ExpandDirectoryInto(PathFromUtf8(chosen), files);
+            ctx.directory_files = std::move(files);
+
+            /* Trim trailing slash before computing the basename so paths
+             * like "C:/foo/bar/" still produce "bar". Falls back to the
+             * whole path for drive roots. */
+            std::string label = chosen;
+            while (!label.empty() &&
+                   (label.back() == '\\' || label.back() == '/')) {
+                label.pop_back();
+            }
+            size_t slash = label.find_last_of("\\/");
+            if (slash != std::string::npos && slash + 1 < label.size()) {
+                label = label.substr(slash + 1);
+            }
+            if (label.empty()) label = chosen;
+            ctx.directory_label = std::move(label);
+
+            if (ctx.state == AppState::StartScreen &&
+                !ctx.directory_files.empty()) {
                 ctx.state = AppState::HexView;
-                std::string new_title = "hxediter — " + ctx.core->GetFilename();
-                glfwSetWindowTitle(window, new_title.c_str());
-                ImGui::ClearActiveID();
-            } catch (const std::exception& e) {
-                ctx.load_error = e.what();
+                ctx.load_error.clear();
+            }
+        }
+
+        /* Drain pending paths: each either focuses an already-open tab or
+         * creates a new one. Errors are batched into ctx.load_error with a
+         * " (and N more)" suffix. A hard cap on simultaneously-open docs
+         * keeps a careless drop-of-node_modules from exhausting file handles
+         * or blowing up ImGui's tab bar. */
+        if (!ctx.pending_paths.empty()) {
+            constexpr size_t kMaxOpenDocs = 200;
+
+            std::vector<std::string> to_open;
+            to_open.swap(ctx.pending_paths);
+
+            std::string first_err;
+            int  additional_err = 0;
+            bool any_opened     = false;
+            int  last_new_index = -1;
+            int  skipped_cap    = 0;
+
+            for (const std::string& path : to_open) {
+                /* Cheap cap check first — once full, the rest of the batch
+                 * is just counted and skipped without per-path filesystem I/O. */
+                if (ctx.docs.size() >= kMaxOpenDocs) {
+                    skipped_cap++;
+                    continue;
+                }
+                std::string key = CanonicalKey(path);
+                if (ctx.open_canonical.count(key) > 0) {
+                    int existing = FindDocByCanonical(ctx.docs, key);
+                    if (existing >= 0) {
+                        ctx.active_doc = existing;
+                        any_opened = true;
+                    }
+                    continue;
+                }
+                try {
+                    OpenDocument od;
+                    od.core = std::make_unique<HexEditorCore>(path);
+                    if (ReadonlyDefault()) od.core->ForceReadOnly();
+                    ctx.docs.push_back(std::move(od));
+                    ctx.open_canonical.insert(key);
+                    last_new_index = (int)ctx.docs.size() - 1;
+                    any_opened = true;
+                } catch (const std::exception& e) {
+                    if (first_err.empty()) first_err = e.what();
+                    else                   additional_err++;
+                } catch (...) {
+                    if (first_err.empty()) first_err = "unknown error opening file";
+                    else                   additional_err++;
+                }
+            }
+
+            if (last_new_index >= 0) ctx.active_doc = last_new_index;
+
+            if (any_opened) {
+                ctx.state = AppState::HexView;
+                ctx.load_error.clear();
+            } else if (ctx.docs.empty()) {
                 ctx.state = AppState::StartScreen;
-                glfwSetWindowTitle(window, "hxediter");
+                ctx.load_error = BuildBatchError(first_err, additional_err);
+            }
+
+            /* Single place that surfaces batch errors and the cap message,
+             * regardless of which arm we landed in above. The start screen
+             * path also seeds ctx.load_error for in-screen rendering. */
+            if (!first_err.empty() && ctx.state == AppState::HexView) {
+                std::string msg = BuildBatchError(first_err, additional_err);
+                std::fprintf(stderr, "Error opening: %s\n", msg.c_str());
+                SetExternalStatus(msg, true);
+            }
+            if (skipped_cap > 0) {
+                char buf[96];
+                std::snprintf(buf, sizeof(buf),
+                              "Tab limit reached (%zu); skipped %d more file%s",
+                              kMaxOpenDocs, skipped_cap,
+                              skipped_cap == 1 ? "" : "s");
+                std::fprintf(stderr, "%s\n", buf);
+                SetExternalStatus(buf, true);
+            }
+
+            ImGui::ClearActiveID();
+        }
+
+        /* Title tracks the active tab. Single-source-of-truth target: the
+         * active doc index when we have one, -1 otherwise. */
+        {
+            const int target = TitleTargetIndex(ctx);
+            if (target != ctx.last_titled_doc) {
+                UpdateWindowTitle(ctx);
+                ctx.last_titled_doc = target;
             }
         }
 
@@ -344,9 +588,102 @@ int main(int argc, char* argv[]) {
 #else
         int drag_over_state = 0;
 #endif
-        RenderHexEditorUI(ctx.state, ctx.core.get(), ctx.load_error.c_str(),
-                          &ctx.pending_path, &ctx.installer_to_launch,
-                          drag_over_state);
+        ctx.close_indices.clear();
+        bool clear_directory     = false;
+        bool request_triage_back = false;
+        RenderHexEditorUI(ctx.state, &ctx.docs, &ctx.active_doc,
+                          ctx.load_error.c_str(),
+                          &ctx.pending_paths,
+                          &ctx.installer_to_launch,
+                          drag_over_state,
+                          &ctx.close_indices,
+                          &ctx.directory_files,
+                          &ctx.directory_label,
+                          &clear_directory,
+                          &ctx.pending_triage_root,
+                          &request_triage_back);
+
+        /* Triage flow: the start screen pushes the chosen folder into
+         * pending_triage_root; the panel sets request_triage_back when
+         * the user clicks Back. Mirrors the pending_directories drain
+         * pattern above. Only one triage scan at a time per process,
+         * which is enforced by triage::StartScan no-opping if a scan
+         * is already running. */
+        if (!ctx.pending_triage_root.empty()) {
+            std::vector<std::string> roots;
+            roots.swap(ctx.pending_triage_root);
+            /* Multi-folder triage isn't supported (one scanner singleton
+             * per process). Surface the dropped roots so the user knows
+             * the silent-discard happened — if they meant to triage all
+             * three, they can re-pick the others one at a time. */
+            if (roots.size() > 1) {
+                std::string msg = "Triage runs one folder at a time; using \"";
+                msg += roots.back();
+                msg += "\" and ignoring " +
+                       std::to_string(roots.size() - 1) + " other root(s).";
+                SetExternalStatus(msg, /*is_error=*/false);
+            }
+            const std::string& chosen = roots.back();
+            triage::Reset();
+            triage::Config cfg;
+            try {
+                triage::StartScan(PathFromUtf8(chosen), cfg, nullptr, nullptr);
+                ctx.state = AppState::FolderTriage;
+            } catch (const triage::ConfigError& e) {
+                /* Defensive: ValidateConfig with default Config can't
+                 * actually fail, but the catch keeps StartScan's noexcept
+                 * promise honest if the config ever gains user-set
+                 * fields here. */
+                ctx.load_error = std::string("triage init failed: ") + e.what();
+            }
+        }
+        if (request_triage_back) {
+            triage::RequestCancel();  /* don't leave a worker churning */
+            triage::Reset();
+            ctx.state = AppState::StartScreen;
+        }
+
+        if (clear_directory) {
+            ctx.directory_files.clear();
+            ctx.directory_label.clear();
+            if (ctx.docs.empty()) {
+                ctx.state = AppState::StartScreen;
+                ctx.active_doc = -1;
+            }
+        }
+
+        /* Consume tab close requests after render so indices still match. */
+        if (!ctx.close_indices.empty()) {
+            std::sort(ctx.close_indices.begin(), ctx.close_indices.end(),
+                      std::greater<int>());
+            ctx.close_indices.erase(
+                std::unique(ctx.close_indices.begin(), ctx.close_indices.end()),
+                ctx.close_indices.end());
+            for (int idx : ctx.close_indices) {
+                if (idx < 0 || idx >= (int)ctx.docs.size()) continue;
+                /* Drop the canonical entry first — must read the filename
+                 * before the unique_ptr is destroyed. */
+                if (ctx.docs[idx].core) {
+                    ctx.open_canonical.erase(
+                        CanonicalKey(ctx.docs[idx].core->GetFilename()));
+                }
+                ctx.docs.erase(ctx.docs.begin() + idx);
+                if (ctx.active_doc > idx) ctx.active_doc--;
+            }
+            if (ctx.docs.empty()) {
+                ctx.active_doc = -1;
+                /* A loaded folder keeps the user in HexView with the
+                 * empty-state prompt; only revert to the start screen
+                 * when there's also nothing to pick from. */
+                if (ctx.directory_files.empty()) {
+                    ctx.state = AppState::StartScreen;
+                }
+            } else {
+                if (ctx.active_doc < 0) ctx.active_doc = 0;
+                if (ctx.active_doc >= (int)ctx.docs.size())
+                    ctx.active_doc = (int)ctx.docs.size() - 1;
+            }
+        }
 
 #ifdef _WIN32
         /* Non-modal Settings popup can be dismissed mid-download; pull

@@ -6,6 +6,7 @@
 
 namespace ui {
 
-void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core);
+void RenderToolbar(GuiState& s, DocumentState& doc,
+                   const theme::Palette& pal, HexEditorCore& core);
 
 } /* namespace ui */

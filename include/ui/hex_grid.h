@@ -26,7 +26,8 @@ struct HexLayout {
 HexLayout ComputeHexLayout(float avail_w, float scale = 1.0f);
 
 void RenderHexHeader(const theme::Palette& pal, const HexLayout& L);
-void RenderHexGrid  (GuiState& s, const theme::Palette& pal,
+void RenderHexGrid  (GuiState& s, DocumentState& doc,
+                     const theme::Palette& pal,
                      HexEditorCore& core, const HexLayout& L);
 
 } /* namespace ui */

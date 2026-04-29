@@ -11,9 +11,9 @@ namespace ui {
 bool ParseHexU64(const char* s, uint64_t* out);
 std::vector<unsigned char> ParseHexBytes(const char* s);
 
-void DoGoto    (GuiState& s, HexEditorCore& core);
-void DoSearch  (GuiState& s, HexEditorCore& core);
-void DoUndo    (GuiState& s, HexEditorCore& core);
-void CommitEdit(GuiState& s, HexEditorCore& core);
+void DoGoto    (GuiState& s, DocumentState& doc, HexEditorCore& core);
+void DoSearch  (GuiState& s, DocumentState& doc, HexEditorCore& core);
+void DoUndo    (GuiState& s, DocumentState& doc, HexEditorCore& core);
+void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core);
 
 } /* namespace ui */

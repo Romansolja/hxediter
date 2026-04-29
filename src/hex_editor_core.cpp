@@ -48,52 +48,21 @@ HexEditorCore::~HexEditorCore()
         fclose(state_.fp);
 }
 
-std::vector<unsigned char> HexEditorCore::GetPageData() const
+std::vector<unsigned char> HexEditorCore::ReadAt(int64_t offset, size_t count) const
 {
-    std::vector<unsigned char> buf(PAGE_SIZE);
-
-    if (fseek64(state_.fp, state_.page_offset, SEEK_SET) != 0)
+    if (offset < 0 || offset >= state_.file_size || count == 0)
         return {};
 
-    size_t got = fread(buf.data(), 1, PAGE_SIZE, state_.fp);
+    int64_t avail = state_.file_size - offset;
+    if ((int64_t)count > avail) count = (size_t)avail;
+
+    std::vector<unsigned char> buf(count);
+    if (fseek64(state_.fp, offset, SEEK_SET) != 0)
+        return {};
+
+    size_t got = fread(buf.data(), 1, count, state_.fp);
     buf.resize(got);
     return buf;
-}
-
-int64_t HexEditorCore::GetCurrentOffset() const
-{
-    return state_.page_offset;
-}
-
-bool HexEditorCore::PageNext()
-{
-    if (state_.page_offset + PAGE_SIZE < state_.file_size) {
-        state_.page_offset += PAGE_SIZE;
-        return true;
-    }
-    return false;
-}
-
-bool HexEditorCore::PagePrev()
-{
-    if (state_.page_offset >= PAGE_SIZE) {
-        state_.page_offset -= PAGE_SIZE;
-        return true;
-    }
-    if (state_.page_offset > 0) {
-        state_.page_offset = 0;
-        return true;
-    }
-    return false;
-}
-
-bool HexEditorCore::GoToOffset(int64_t offset)
-{
-    if (offset < 0 || offset >= state_.file_size)
-        return false;
-
-    state_.page_offset = (offset / PAGE_SIZE) * PAGE_SIZE;
-    return true;
 }
 
 std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char new_val)
@@ -117,7 +86,6 @@ std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char 
         return std::nullopt;
 
     undo_push(&state_, offset, old_val, new_val);
-    state_.page_offset = (offset / PAGE_SIZE) * PAGE_SIZE;
 
     /* Rebaseline so our own write doesn't trip HasExternalModification. */
     baseline_token_ = get_file_mtime_token(state_.filename);
@@ -137,22 +105,22 @@ std::optional<UndoResult> HexEditorCore::Undo()
         return std::nullopt;
     }
 
-    state_.page_offset = (entry.offset / PAGE_SIZE) * PAGE_SIZE;
     baseline_token_ = get_file_mtime_token(state_.filename);
 
     return UndoResult{entry.offset, entry.old_val, entry.new_val, state_.undo_count};
 }
 
-std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned char>& pattern)
+std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned char>& pattern,
+                                                   int64_t start_offset)
 {
     if (pattern.empty())
         return std::nullopt;
 
     int64_t result = search_bytes(state_.fp, state_.file_size,
-                                  state_.page_offset, pattern.data(),
+                                  start_offset, pattern.data(),
                                   static_cast<int>(pattern.size()));
 
-    if (result == -1 && state_.page_offset > 0) {
+    if (result == -1 && start_offset > 0) {
         result = search_bytes(state_.fp, state_.file_size, 0,
                               pattern.data(), static_cast<int>(pattern.size()));
     }
@@ -160,8 +128,7 @@ std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned cha
     if (result == -1)
         return std::nullopt;
 
-    state_.page_offset = (result / PAGE_SIZE) * PAGE_SIZE;
-    return SearchResult{result, state_.page_offset};
+    return SearchResult{result};
 }
 
 int64_t HexEditorCore::GetFileSize() const
@@ -184,16 +151,6 @@ void HexEditorCore::ForceReadOnly()
     state_.is_readonly = 1;
 }
 
-int64_t HexEditorCore::GetPageNumber() const
-{
-    return (state_.page_offset / PAGE_SIZE) + 1;
-}
-
-int64_t HexEditorCore::GetTotalPages() const
-{
-    return (state_.file_size + PAGE_SIZE - 1) / PAGE_SIZE;
-}
-
 int HexEditorCore::GetUndoCount() const
 {
     return state_.undo_count;
@@ -214,13 +171,6 @@ bool HexEditorCore::ReloadFromDisk()
     int64_t new_size = get_file_size(state_.fp);
     if (new_size < 0) return false;
     state_.file_size = new_size;
-
-    /* Clamp offset so the caret isn't past EOF after a truncation. */
-    if (state_.page_offset >= state_.file_size) {
-        state_.page_offset = (state_.file_size > 0)
-            ? ((state_.file_size - 1) / PAGE_SIZE) * PAGE_SIZE
-            : 0;
-    }
 
     /* Drop undo — old offsets may no longer refer to the same bytes. */
     state_.undo_count = 0;

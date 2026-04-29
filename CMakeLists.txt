@@ -87,13 +87,42 @@ FetchContent_MakeAvailable(nlohmann_json)
 find_package(OpenGL REQUIRED)
 
 # ---------------------------------------------------------------------------
+# xxHash — single-header hash library (BSD 2-Clause), vendored at
+# third_party/xxhash. Exposed as INTERFACE so consumers just include the
+# header; the implementation is generated in the one TU that defines
+# XXH_IMPLEMENTATION (see src/triage/hasher.cpp).
+# ---------------------------------------------------------------------------
+add_library(xxhash INTERFACE)
+target_include_directories(xxhash INTERFACE third_party/xxhash)
+
+# ---------------------------------------------------------------------------
+# hxcore — pure-logic static lib shared by the hxediter GUI and the
+# hxsort CLI. No ImGui / GLFW / OpenGL deps. Holds path utilities,
+# low-level file I/O, and the triage classification module. Triage source
+# files are appended below as each one is implemented; this list is
+# always source-of-truth.
+# ---------------------------------------------------------------------------
+set(HXCORE_SOURCES
+    src/path_utils.cpp
+    src/fileops.cpp
+    src/triage/signatures.cpp
+    src/triage/hasher.cpp
+    src/triage/classifier.cpp
+    src/triage/move_actions.cpp
+    src/triage/scanner.cpp
+)
+add_library(hxcore STATIC ${HXCORE_SOURCES})
+target_include_directories(hxcore PUBLIC include)
+target_compile_features(hxcore PUBLIC cxx_std_17)
+target_link_libraries(hxcore PUBLIC xxhash)
+
+# ---------------------------------------------------------------------------
 # hxediter executable
 # ---------------------------------------------------------------------------
 set(HXEDITER_SOURCES
     src/main.cpp
     src/gui.cpp
     src/hex_editor_core.cpp
-    src/fileops.cpp
     src/undo.cpp
     src/updater.cpp
     src/ui/theme.cpp
@@ -105,6 +134,7 @@ set(HXEDITER_SOURCES
     src/ui/start_screen.cpp
     src/ui/help_panel.cpp
     src/ui/settings_panel.cpp
+    src/ui/triage_panel.cpp
     ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
@@ -119,6 +149,7 @@ target_include_directories(hxediter PRIVATE
     ${imguifiledialog_SOURCE_DIR}
 )
 target_link_libraries(hxediter PRIVATE
+    hxcore
     imgui glfw OpenGL::GL
     nlohmann_json::nlohmann_json
     winhttp bcrypt ole32 shell32
@@ -146,15 +177,35 @@ if(MINGW)
     target_link_options(hxediter-updater-helper PRIVATE -static -mwindows)
 endif()
 
-# Stage runtime assets (fonts) next to the binary so the relative path
+# ---------------------------------------------------------------------------
+# hxsort — headless folder-triage CLI. Console-mode exe (no -mwindows),
+# links hxcore + nlohmann_json only. Same install destination as the
+# hex editor so the NSIS package ships both binaries.
+# ---------------------------------------------------------------------------
+add_executable(hxsort src/cli/hxsort_main.cpp)
+target_link_libraries(hxsort PRIVATE
+    hxcore
+    nlohmann_json::nlohmann_json
+)
+target_compile_definitions(hxsort PRIVATE APP_VERSION="${PROJECT_VERSION}")
+if(MINGW)
+    target_link_options(hxsort PRIVATE -static)
+endif()
+
+# Stage runtime assets (fonts) next to the binary on every build so font
+# updates land without forcing a reconfigure. Relative path
 # "assets/fonts/..." used by the font loader resolves regardless of the
 # working directory CLion's Run Configuration chooses.
-file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_BINARY_DIR})
+add_custom_command(TARGET hxediter POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets ${CMAKE_BINARY_DIR}/assets
+    COMMENT "Staging assets next to hxediter"
+)
 
 # ---------------------------------------------------------------------------
 # Install rules
 # ---------------------------------------------------------------------------
-install(TARGETS hxediter hxediter-updater-helper RUNTIME DESTINATION .)
+install(TARGETS hxediter hxediter-updater-helper hxsort RUNTIME DESTINATION .)
 install(DIRECTORY assets DESTINATION .)
 install(FILES LICENSE.txt DESTINATION .)
 

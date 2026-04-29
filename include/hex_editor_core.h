@@ -8,7 +8,6 @@
 
 struct SearchResult {
     int64_t offset;
-    int64_t page_offset;
 };
 
 struct EditResult {
@@ -32,18 +31,19 @@ public:
     HexEditorCore(const HexEditorCore&) = delete;
     HexEditorCore& operator=(const HexEditorCore&) = delete;
 
-    std::vector<unsigned char> GetPageData() const;
-
-    int64_t GetCurrentOffset() const;
-    bool PageNext();
-    bool PagePrev();
-    bool GoToOffset(int64_t offset);
+    /* Reads up to `count` bytes starting at `offset` (clamped to EOF).
+     * Returns the bytes read; empty on seek/read failure. The render loop
+     * uses this to pull only the visible rows each frame, so the file
+     * itself is never resident in RAM. */
+    std::vector<unsigned char> ReadAt(int64_t offset, size_t count) const;
 
     std::optional<EditResult> EditByte(int64_t offset, unsigned char new_val);
     std::optional<UndoResult> Undo();
 
-    /* Wraps around to the beginning if not found searching forward. */
-    std::optional<SearchResult> Search(const std::vector<unsigned char>& pattern);
+    /* Wraps around to the beginning if not found searching forward from
+     * the given start offset. */
+    std::optional<SearchResult> Search(const std::vector<unsigned char>& pattern,
+                                        int64_t start_offset);
 
     int64_t     GetFileSize() const;
     std::string GetFilename() const;
@@ -51,8 +51,6 @@ public:
     /* One-way latch: flips is_readonly on regardless of filesystem
      * permissions. Used by the "open as read-only" setting. */
     void        ForceReadOnly();
-    int64_t     GetPageNumber() const;
-    int64_t     GetTotalPages() const;
     int         GetUndoCount() const;
 
     /* True if the file on disk differs from the baseline captured at

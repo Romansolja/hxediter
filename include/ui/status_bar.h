@@ -10,8 +10,10 @@ namespace ui {
 
 void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha = 1.0f);
 
-const char* GetContextualHint(const GuiState& s, const HexEditorCore& core);
+const char* GetContextualHint(const GuiState& s, const DocumentState& doc,
+                              const HexEditorCore& core);
 
-void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core);
+void RenderStatusBar(GuiState& s, DocumentState& doc,
+                     const theme::Palette& pal, HexEditorCore& core);
 
 } /* namespace ui */

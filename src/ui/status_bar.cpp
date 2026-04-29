@@ -34,12 +34,13 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImGui::Dummy(size);
 }
 
-const char* GetContextualHint(const GuiState& s, const HexEditorCore& core) {
-    if (s.selected_byte >= 0)
+const char* GetContextualHint(const GuiState& /*s*/, const DocumentState& doc,
+                              const HexEditorCore& core) {
+    if (doc.selected_byte >= 0)
         return "Type 1-2 hex digits, Enter to commit, Esc to cancel";
-    if (s.focus_field == GuiState::FOCUS_GOTO)
+    if (doc.focus_field == GuiState::FOCUS_GOTO)
         return "Hex offset (e.g. 1A0), Enter to jump";
-    if (s.focus_field == GuiState::FOCUS_SEARCH)
+    if (doc.focus_field == GuiState::FOCUS_SEARCH)
         return "Hex bytes (e.g. DE AD BE EF), Enter to find";
     if (core.IsReadOnly())
         return "Read-only file: click bytes to inspect, F1 for shortcuts";
@@ -80,15 +81,21 @@ static bool DismissButton(const char* id, float size,
     return clicked;
 }
 
-void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) {
+void RenderStatusBar(GuiState& s, DocumentState& doc,
+                     const theme::Palette& pal, HexEditorCore& core) {
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
 
-    ImGui::Text("0x%08" PRIX64 "   Page %" PRId64 "/%" PRId64 "   %" PRId64 " B",
-                (uint64_t)core.GetCurrentOffset(),
-                core.GetPageNumber(),
-                core.GetTotalPages(),
-                core.GetFileSize());
+    /* Caret offset (em-dash when nothing has been clicked) plus the file
+     * size in bytes. No more "page N/M" — the body scrolls freely. Size
+     * is decimal only; the hex twin was redundant noise. */
+    if (doc.caret_byte >= 0) {
+        ImGui::Text("0x%08" PRIX64 "   %" PRId64 " B",
+                    (uint64_t)doc.caret_byte,
+                    core.GetFileSize());
+    } else {
+        ImGui::Text("\xE2\x80\x94   %" PRId64 " B", core.GetFileSize());
+    }
 
     ImGui::SameLine(0, layout::kStatusGroupGap);
     Badge("OVR", pal.status_neutral_bg, pal.status_neutral_fg);
@@ -107,7 +114,7 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
         Badge("CLEAN", pal.status_ok_bg, pal.status_ok_fg);
     }
 
-    if (s.externally_modified) {
+    if (doc.externally_modified) {
         ImGui::SameLine(0, layout::kStatusInGroup);
         Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg);
     }
@@ -180,7 +187,7 @@ void RenderStatusBar(GuiState& s, const theme::Palette& pal, HexEditorCore& core
     else
         std::snprintf(metric, sizeof(metric), "Startup: \xE2\x80\xA6");
 
-    const char* hint      = GetContextualHint(s, core);
+    const char* hint      = GetContextualHint(s, doc, core);
     float       metric_w  = ImGui::CalcTextSize(metric).x;
     float       hint_full = ImGui::CalcTextSize(hint).x;
     float       char_w    = ImGui::CalcTextSize("A").x;

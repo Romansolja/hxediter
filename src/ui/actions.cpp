@@ -49,46 +49,56 @@ std::vector<unsigned char> ParseHexBytes(const char* s) {
     return out;
 }
 
-void DoGoto(GuiState& s, HexEditorCore& core) {
+void DoGoto(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     uint64_t off;
-    if (!ParseHexU64(s.goto_buf, &off)) {
+    if (!ParseHexU64(doc.goto_buf, &off)) {
         s.SetStatus("Invalid offset", GuiState::STATUS_ERROR);
         return;
     }
-    if (!core.GoToOffset((int64_t)off)) {
+    int64_t signed_off = (int64_t)off;
+    if (signed_off < 0 || signed_off >= core.GetFileSize()) {
         s.SetStatus("Offset out of range", GuiState::STATUS_ERROR);
         return;
     }
     s.MarkInteracted();
+    doc.caret_byte            = signed_off;
+    doc.pending_scroll_offset = signed_off;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "Jumped to 0x%" PRIX64, (uint64_t)off);
     s.SetStatus(buf, GuiState::STATUS_OK);
 }
 
-void DoSearch(GuiState& s, HexEditorCore& core) {
-    auto pat = ParseHexBytes(s.search_buf);
+void DoSearch(GuiState& s, DocumentState& doc, HexEditorCore& core) {
+    auto pat = ParseHexBytes(doc.search_buf);
     if (pat.empty()) {
         s.SetStatus("Invalid hex pattern", GuiState::STATUS_ERROR);
         return;
     }
-    auto res = core.Search(pat);
+    /* Resume search from just after the last hit so repeat-find advances
+     * through the file; fall back to caret or 0 on first search. */
+    int64_t start = 0;
+    if (doc.last_hit >= 0)        start = doc.last_hit + 1;
+    else if (doc.caret_byte >= 0) start = doc.caret_byte;
+    auto res = core.Search(pat, start);
     if (!res) {
-        s.last_hit = -1;
+        doc.last_hit = -1;
         s.SetStatus("Pattern not found", GuiState::STATUS_WARN);
         return;
     }
     s.MarkInteracted();
-    s.last_hit = res->offset;
+    doc.last_hit              = res->offset;
+    doc.caret_byte            = res->offset;
+    doc.pending_scroll_offset = res->offset;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "Found at 0x%" PRIX64, (uint64_t)res->offset);
     s.SetStatus(buf, GuiState::STATUS_OK);
 }
 
-void DoUndo(GuiState& s, HexEditorCore& core) {
+void DoUndo(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     /* External writer may have touched the same offset; restoring old_val
      * would clobber it. Gate through the conflict modal. */
-    if (s.externally_modified) {
-        s.conflict_modal_open = true;
+    if (doc.externally_modified) {
+        doc.conflict_modal_open = true;
         return;
     }
     auto res = core.Undo();
@@ -105,27 +115,27 @@ void DoUndo(GuiState& s, HexEditorCore& core) {
     s.SetStatus(buf, GuiState::STATUS_OK);
 }
 
-void CommitEdit(GuiState& s, HexEditorCore& core) {
-    if (s.selected_byte < 0) return;
-    if (s.edit_buf[0] == '\0') { s.selected_byte = -1; return; }
+void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core) {
+    if (doc.selected_byte < 0) return;
+    if (doc.edit_buf[0] == '\0') { doc.selected_byte = -1; return; }
 
     unsigned int v = 0;
-    if (std::sscanf(s.edit_buf, "%x", &v) != 1 || v > 0xFF) {
+    if (std::sscanf(doc.edit_buf, "%x", &v) != 1 || v > 0xFF) {
         s.SetStatus("Invalid byte value", GuiState::STATUS_ERROR);
-        s.selected_byte = -1;
+        doc.selected_byte = -1;
         return;
     }
 
     /* Stash the edit and gate through the modal instead of blind-overwriting. */
-    if (s.externally_modified) {
-        s.pending_edit_offset = s.selected_byte;
-        s.pending_edit_value  = (unsigned char)v;
-        s.conflict_modal_open = true;
-        s.selected_byte = -1;
+    if (doc.externally_modified) {
+        doc.pending_edit_offset = doc.selected_byte;
+        doc.pending_edit_value  = (unsigned char)v;
+        doc.conflict_modal_open = true;
+        doc.selected_byte = -1;
         return;
     }
 
-    auto res = core.EditByte(s.selected_byte, (unsigned char)v);
+    auto res = core.EditByte(doc.selected_byte, (unsigned char)v);
     if (!res) {
         s.SetStatus("Edit failed (read-only?)", GuiState::STATUS_ERROR);
     } else {
@@ -136,7 +146,7 @@ void CommitEdit(GuiState& s, HexEditorCore& core) {
                       (uint64_t)res->offset, res->old_val, res->new_val);
         s.SetStatus(buf, GuiState::STATUS_OK);
     }
-    s.selected_byte = -1;
+    doc.selected_byte = -1;
 }
 
 } /* namespace ui */

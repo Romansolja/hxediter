@@ -9,7 +9,8 @@
 
 namespace ui {
 
-void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) {
+void RenderToolbar(GuiState& s, DocumentState& doc,
+                   const theme::Palette& pal, HexEditorCore& core) {
     const float group_gap = layout::kToolbarGroupGap;
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fp = style.FramePadding.x * 2.0f;
@@ -34,9 +35,6 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
      * under the right-anchored settings gear. */
     auto textw = [](const char* t) { return ImGui::CalcTextSize(t).x; };
 
-    const float w_nav_label  = textw("NAV");
-    const float w_prev       = textw("<< Prev") + fp;
-    const float w_next       = textw("Next >>") + fp;
     const float w_jump_label = textw("JUMP");
     const float w_goto_label = textw("Goto:");
     const float w_go         = textw("Go") + fp;
@@ -63,9 +61,8 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
     float search_w = search_nominal;
 
     auto compute_needed = [&]() {
-        float w = w_nav_label + is + w_prev + is + w_next;
-        w += group_gap + (show_jump_label ? (w_jump_label + is) : 0.0f)
-           + w_goto_label + is + goto_w + is + w_go;
+        float w = (show_jump_label ? (w_jump_label + is) : 0.0f)
+                + w_goto_label + is + goto_w + is + w_go;
         if (show_search_group) {
             w += group_gap + (show_search_label ? (w_search_lbl + is) : 0.0f)
                + search_w;
@@ -95,24 +92,6 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
     if (compute_needed() > avail) show_jump_label   = false;
     if (compute_needed() > avail) show_search_group = false;
 
-    ImGui::TextDisabled("NAV");
-    ImGui::SameLine();
-    PushSecondary();
-    if (ImGui::Button("<< Prev")) {
-        if (core.PagePrev()) s.MarkInteracted();
-        else                 s.SetStatus("At start of file", GuiState::STATUS_WARN);
-    }
-    PopBtn();
-    ImGui::SameLine();
-    PushPrimary();
-    if (ImGui::Button("Next >>")) {
-        if (core.PageNext()) s.MarkInteracted();
-        else                 s.SetStatus("At end of file", GuiState::STATUS_WARN);
-    }
-    PopBtn();
-
-    ImGui::SameLine(0.0f, group_gap);
-
     if (show_jump_label) {
         ImGui::TextDisabled("JUMP");
         ImGui::SameLine();
@@ -120,15 +99,15 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
     ImGui::TextUnformatted("Goto:");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(goto_w);
-    if (ImGui::InputText("##goto", s.goto_buf, sizeof(s.goto_buf),
+    if (ImGui::InputText("##goto", doc.goto_buf, sizeof(doc.goto_buf),
                          ImGuiInputTextFlags_CharsHexadecimal |
                          ImGuiInputTextFlags_EnterReturnsTrue)) {
-        DoGoto(s, core);
+        DoGoto(s, doc, core);
     }
-    if (ImGui::IsItemActive()) s.focus_field = GuiState::FOCUS_GOTO;
+    if (ImGui::IsItemActive()) doc.focus_field = GuiState::FOCUS_GOTO;
     ImGui::SameLine();
     PushPrimary();
-    if (ImGui::Button("Go")) DoGoto(s, core);
+    if (ImGui::Button("Go")) DoGoto(s, doc, core);
     PopBtn();
 
     if (show_search_group) {
@@ -139,21 +118,24 @@ void RenderToolbar(GuiState& s, const theme::Palette& pal, HexEditorCore& core) 
             ImGui::SameLine();
         }
         ImGui::SetNextItemWidth(search_w);
-        if (ImGui::InputText("##search", s.search_buf, sizeof(s.search_buf),
+        if (ImGui::InputText("##search", doc.search_buf, sizeof(doc.search_buf),
                              ImGuiInputTextFlags_EnterReturnsTrue)) {
-            DoSearch(s, core);
+            DoSearch(s, doc, core);
         }
-        if (ImGui::IsItemActive()) s.focus_field = GuiState::FOCUS_SEARCH;
+        /* Pattern changed — restart from caret/0 instead of resuming past
+         * the previous match for a different pattern. */
+        if (ImGui::IsItemEdited()) doc.last_hit = -1;
+        if (ImGui::IsItemActive()) doc.focus_field = GuiState::FOCUS_SEARCH;
         if (show_find) {
             ImGui::SameLine();
             PushPrimary();
-            if (ImGui::Button("Find")) DoSearch(s, core);
+            if (ImGui::Button("Find")) DoSearch(s, doc, core);
             PopBtn();
         }
         if (show_undo) {
             ImGui::SameLine();
             PushSecondary();
-            if (ImGui::Button("Undo")) DoUndo(s, core);
+            if (ImGui::Button("Undo")) DoUndo(s, doc, core);
             PopBtn();
         }
     }

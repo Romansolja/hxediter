@@ -22,10 +22,6 @@
     #define ftell64(fp)              ((int64_t)ftello(fp))
 #endif
 
-#define BYTES_PER_LINE 16
-#define LINES_PER_PAGE 16
-#define PAGE_SIZE (BYTES_PER_LINE * LINES_PER_PAGE)
-#define MAX_SEARCH_BYTES 16
 #define INPUT_BUF_SIZE 128
 #define UNDO_MAX 64
 #define SEARCH_CHUNK 4096

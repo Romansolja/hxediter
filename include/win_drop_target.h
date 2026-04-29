@@ -7,6 +7,7 @@
 #include <oleidl.h>
 
 #include <string>
+#include <vector>
 
 namespace platform {
 
@@ -17,7 +18,9 @@ enum class DragState : int { None = 0, Valid = 1, Invalid = 2 };
 
 class WinDropTarget : public IDropTarget {
 public:
-    WinDropTarget(DragState* drag_state, std::string* pending_path);
+    WinDropTarget(DragState* drag_state,
+                  std::vector<std::string>* pending_paths,
+                  std::vector<std::string>* pending_directories);
 
     /* IUnknown */
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) override;
@@ -35,9 +38,10 @@ public:
 
 private:
     LONG        ref_count_;
-    DragState*   drag_state_;     /* not owned */
-    std::string* pending_path_;  /* not owned */
-    DWORD       cached_effect_;  /* echoed from DragEnter in DragOver */
+    DragState*  drag_state_;                            /* not owned */
+    std::vector<std::string>* pending_paths_;           /* not owned */
+    std::vector<std::string>* pending_directories_;     /* not owned */
+    DWORD       cached_effect_;                         /* echoed from DragEnter in DragOver */
 };
 
 } /* namespace platform */

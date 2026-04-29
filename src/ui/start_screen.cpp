@@ -11,8 +11,10 @@
 namespace ui {
 
 void RenderStartScreen(GuiState& s, const theme::Palette& pal,
-                       const char* load_error, std::string* out_pending_path,
-                       int drag_over_state) {
+                       const char* load_error,
+                       std::vector<std::string>* out_pending_paths,
+                       int drag_over_state,
+                       std::vector<std::string>* out_pending_triage_root) {
     ImVec2 avail  = ImGui::GetContentRegionAvail();
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -33,12 +35,14 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         ImVec2(origin.x + avail.x, origin.y + avail.y),
         top_col, top_col, bottom_col, bottom_col);
 
-    const char* title_str  = "HxEditer";
-    const char* icon_str   = ICON_FA_FILE;
-    const char* drop_str   = "Drag and drop a file here";
-    const char* button_str = "Select File";
+    const char* title_str   = "HxEditer";
+    const char* icon_str    = ICON_FA_FILE;
+    const char* drop_str    = "Drag and drop a file here";
+    const char* button_str  = "Select File";
+    const char* button2_str = "Triage Folder...";
+    const float gap_between_buttons = 12.0f;
 
-    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz;
+    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button2_label_sz;
 
     if (s.title_font) ImGui::PushFont(s.title_font);
     title_sz = ImGui::CalcTextSize(title_str);
@@ -53,12 +57,17 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 
     if (s.ui_font) ImGui::PushFont(s.ui_font);
-    drop_sz         = ImGui::CalcTextSize(drop_str);
-    button_label_sz = ImGui::CalcTextSize(button_str);
+    drop_sz          = ImGui::CalcTextSize(drop_str);
+    button_label_sz  = ImGui::CalcTextSize(button_str);
+    button2_label_sz = ImGui::CalcTextSize(button2_str);
     if (s.ui_font) ImGui::PopFont();
 
     ImGuiStyle& style = ImGui::GetStyle();
-    ImVec2 button_sz(button_label_sz.x + style.FramePadding.x * 2.0f + 40.0f,
+    /* Both buttons share the wider of the two label widths so they line
+     * up vertically. Heights are equal because text height is identical. */
+    const float button_label_w = (button_label_sz.x > button2_label_sz.x)
+                                   ? button_label_sz.x : button2_label_sz.x;
+    ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f,
                      button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f);
 
     const float gap_icon_to_title  = layout::kStartIconToTitle;
@@ -69,7 +78,8 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     float col_h = icon_sz.y + gap_icon_to_title
                 + title_sz.y + gap_title_to_drop
                 + drop_sz.y  + gap_drop_to_button
-                + button_sz.y;
+                + button_sz.y
+                + gap_between_buttons + button_sz.y;
     if (load_error && *load_error)
         col_h += gap_button_to_err + ImGui::GetTextLineHeight();
 
@@ -123,6 +133,19 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
             "HxEditerOpenFile", "Choose a file to open", ".*", cfg);
     }
 
+    y += button_sz.y + gap_between_buttons;
+    /* Second button: "Triage Folder..." opens a directory picker. Filter
+     * == nullptr puts ImGuiFileDialog into directory-selection mode (see
+     * ImGuiFileDialog README "directory chooser" section). */
+    ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
+    if (ImGui::Button(button2_str, button_sz)) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path  = ".";
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "HxEditerTriageFolder", "Choose a folder to triage", nullptr, cfg);
+    }
+
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);
 
@@ -144,8 +167,18 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImVec2 dlg_max(FLT_MAX, FLT_MAX);
     if (ImGuiFileDialog::Instance()->Display(
             "HxEditerOpenFile", ImGuiWindowFlags_NoCollapse, dlg_min, dlg_max)) {
-        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_path) {
-            *out_pending_path = ImGuiFileDialog::Instance()->GetFilePathName();
+        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_paths) {
+            out_pending_paths->push_back(
+                ImGuiFileDialog::Instance()->GetFilePathName());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGuiFileDialog::Instance()->Display(
+            "HxEditerTriageFolder", ImGuiWindowFlags_NoCollapse, dlg_min, dlg_max)) {
+        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_triage_root) {
+            /* In directory-mode, GetCurrentPath() is the selected folder. */
+            out_pending_triage_root->push_back(
+                ImGuiFileDialog::Instance()->GetCurrentPath());
         }
         ImGuiFileDialog::Instance()->Close();
     }
