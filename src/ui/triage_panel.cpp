@@ -7,6 +7,7 @@
 #include "path_utils.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"   /* ImGui::RenderCheckMark for the row glyph */
 
 #include <algorithm>
 #include <atomic>
@@ -97,9 +98,11 @@ void StartMoveThread(std::vector<triage::MoveOp> ops,
         char summary[200];
         if (was_cancelled) {
             std::snprintf(summary, sizeof(summary),
-                          "Cancelled after %llu / %llu moves",
+                          "Cancelled after %llu of %llu (%llu failed, %llu rejected)",
                           (unsigned long long)moved,
-                          (unsigned long long)ops.size());
+                          (unsigned long long)ops.size(),
+                          (unsigned long long)failed,
+                          (unsigned long long)rejected);
         } else {
             std::snprintf(summary, sizeof(summary),
                           "Moved %llu of %llu (%llu failed, %llu rejected)",
@@ -148,19 +151,6 @@ std::string FormatBytes(std::uint64_t b) {
     else if (b >= kKiB) std::snprintf(buf, sizeof(buf), "%.1f KB", (double)b / kKiB);
     else std::snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)b);
     return buf;
-}
-
-/* Strip the common-prefix scan root so the table shows root-relative
- * paths. Falls back to the absolute path if the prefix doesn't match
- * (paranoid; shouldn't happen). */
-std::string RelativePath(const std::string& abs_path,
-                         const std::string& root_abs) {
-    if (root_abs.empty()) return abs_path;
-    if (abs_path.size() <= root_abs.size()) return abs_path;
-    if (abs_path.compare(0, root_abs.size(), root_abs) != 0) return abs_path;
-    std::size_t i = root_abs.size();
-    while (i < abs_path.size() && (abs_path[i] == '/' || abs_path[i] == '\\')) ++i;
-    return abs_path.substr(i);
 }
 
 bool MaskHas(std::uint8_t mask, triage::Verdict v) {
@@ -295,13 +285,26 @@ void RenderTriagePanel(GuiState& s, bool* out_request_back) {
     table_size.y -= footer_h;
     if (table_size.y < 100.0f) table_size.y = 100.0f;
 
-    if (ImGui::BeginTable("##triage_table", 6, table_flags, table_size)) {
+    /* Table id bumped to "_v2" once: the previous "##triage_table" id
+     * got persistent column widths saved to imgui.ini that overrode the
+     * configured init widths (Selection 24, Verdict 80). Fresh id =
+     * fresh hash = ImGui starts with the defaults below; the orphaned
+     * old block in imgui.ini is harmless and decays out of relevance. */
+    if (ImGui::BeginTable("##triage_table_v2", 6, table_flags, table_size)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("##sel",    ImGuiTableColumnFlags_WidthFixed, 24);
-        ImGui::TableSetupColumn("Verdict",  ImGuiTableColumnFlags_WidthFixed, 80);
-        ImGui::TableSetupColumn("Size",     ImGuiTableColumnFlags_WidthFixed, 80);
-        ImGui::TableSetupColumn("Sig",      ImGuiTableColumnFlags_WidthFixed, 56);
-        ImGui::TableSetupColumn("Dup",      ImGuiTableColumnFlags_WidthFixed, 40);
+        /* All fixed-width columns are NoResize: their content (verdict
+         * label, formatted size, short signature id, dup count) has a
+         * known visual budget and dragging the dividers around just
+         * makes the UI lopsided without revealing more information.
+         * Path stays WidthStretch so it absorbs whatever horizontal
+         * space the window has left over. */
+        constexpr ImGuiTableColumnFlags fixed = ImGuiTableColumnFlags_WidthFixed
+                                              | ImGuiTableColumnFlags_NoResize;
+        ImGui::TableSetupColumn("##sel",    fixed, 24);
+        ImGui::TableSetupColumn("Verdict",  fixed, 80);
+        ImGui::TableSetupColumn("Size",     fixed, 80);
+        ImGui::TableSetupColumn("Sig",      fixed, 56);
+        ImGui::TableSetupColumn("Dup",      fixed, 40);
         ImGui::TableSetupColumn("Path",     ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableHeadersRow();
 
@@ -314,10 +317,44 @@ void RenderTriagePanel(GuiState& s, bool* out_request_back) {
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                bool checked = s.triage_checked[i];
-                char chk_id[24]; std::snprintf(chk_id, sizeof(chk_id), "##t%zu", i);
-                if (ImGui::Checkbox(chk_id, &checked)) {
-                    s.triage_checked[i] = checked;
+
+                /* The whole row is the click target — clicking anywhere
+                 * toggles selection. Without SpanAllColumns the click
+                 * region is just the tiny native-checkbox glyph, leaving
+                 * a wide dead band in column 0 that hover-highlights but
+                 * does nothing. AllowOverlap is future-proofing for
+                 * future interactive widgets in other columns; today the
+                 * other cells are pure Text. */
+                const bool checked = s.triage_checked[i];
+                char row_id[24]; std::snprintf(row_id, sizeof(row_id), "##trow%zu", i);
+                if (ImGui::Selectable(row_id, checked,
+                                      ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowOverlap)) {
+                    s.triage_checked[i] = !checked;
+                }
+
+                /* Static checkbox glyph in column 0, drawn on top of the
+                 * Selectable's highlight. Uses the same primitives as
+                 * ImGui's native Checkbox (RenderCheckMark) so the look
+                 * matches the rest of the UI; click handling is owned by
+                 * the Selectable above, this is purely visual. */
+                {
+                    const ImVec2 row_min = ImGui::GetItemRectMin();
+                    const float  row_h   = ImGui::GetItemRectSize().y;
+                    const float  sq      = ImGui::GetFontSize();
+                    const float  pad_y   = (row_h - sq) * 0.5f;
+                    const ImVec2 box_min(row_min.x + 4.0f, row_min.y + pad_y);
+                    const ImVec2 box_max(box_min.x + sq, box_min.y + sq);
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddRect(box_min, box_max,
+                                ImGui::GetColorU32(ImGuiCol_Border), 2.0f);
+                    if (checked) {
+                        ImGui::RenderCheckMark(
+                            dl,
+                            ImVec2(box_min.x + 2.0f, box_min.y + 2.0f),
+                            ImGui::GetColorU32(ImGuiCol_CheckMark),
+                            sq - 4.0f);
+                    }
                 }
 
                 ImGui::TableSetColumnIndex(1);
@@ -339,7 +376,9 @@ void RenderTriagePanel(GuiState& s, bool* out_request_back) {
                 }
 
                 ImGui::TableSetColumnIndex(5);
-                const std::string rel = RelativePath(fv.path, root_abs);
+                const std::string rel = PathToGenericUtf8(
+                    PlatformPathRelative(PathFromUtf8(fv.path),
+                                         PathFromUtf8(root_abs)));
                 ImGui::TextUnformatted(rel.c_str());
             }
         }

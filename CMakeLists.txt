@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.14)
 project(hxediter
-    VERSION 4.2.0
+    VERSION 5.0.0
     DESCRIPTION "A hex editor built with Dear ImGui"
     HOMEPAGE_URL "https://github.com/Romansolja/hxediter"
     LANGUAGES CXX
@@ -52,21 +52,6 @@ target_include_directories(imgui PUBLIC
     ${imgui_SOURCE_DIR}/backends
 )
 target_link_libraries(imgui PUBLIC glfw)
-
-# ---------------------------------------------------------------------------
-# ImGuiFileDialog — in-ImGui file browser (matches our dark theme)
-# SOURCE_SUBDIR points at a non-existent directory so MakeAvailable fetches
-# the source without running the upstream CMakeLists.txt. We compile the
-# single .cpp directly as part of the hxediter executable below.
-# ---------------------------------------------------------------------------
-FetchContent_Declare(
-    imguifiledialog
-    GIT_REPOSITORY https://github.com/aiekick/ImGuiFileDialog.git
-    GIT_TAG        v0.6.7
-    GIT_SHALLOW    TRUE
-    SOURCE_SUBDIR  do-not-exist
-)
-FetchContent_MakeAvailable(imguifiledialog)
 
 # ---------------------------------------------------------------------------
 # nlohmann/json — single-header JSON parser for the GitHub releases API
@@ -135,18 +120,19 @@ set(HXEDITER_SOURCES
     src/ui/help_panel.cpp
     src/ui/settings_panel.cpp
     src/ui/triage_panel.cpp
-    ${imguifiledialog_SOURCE_DIR}/ImGuiFileDialog.cpp
 )
 
 if(WIN32)
-    list(APPEND HXEDITER_SOURCES src/win_drop_target.cpp)
+    list(APPEND HXEDITER_SOURCES
+        src/win_drop_target.cpp
+        src/platform/file_dialogs_win32.cpp
+    )
 endif()
 
 add_executable(hxediter ${HXEDITER_SOURCES})
 
 target_include_directories(hxediter PRIVATE
     include
-    ${imguifiledialog_SOURCE_DIR}
 )
 target_link_libraries(hxediter PRIVATE
     hxcore

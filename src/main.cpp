@@ -337,6 +337,9 @@ int main(int argc, char* argv[]) {
                                     &ctx.pending_paths,
                                     &ctx.pending_directories);
     RegisterDragDrop(hwnd, drop_target);
+    /* The start screen's native Open / Folder-picker dialogs are parented
+     * to this HWND so they stay modal-attached to the editor window. */
+    SetNativeWindowHandle(hwnd);
 #endif
 
     IMGUI_CHECKVERSION();

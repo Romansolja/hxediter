@@ -1,12 +1,12 @@
 #include "ui/start_screen.h"
 #include "ui/layout.h"
+#include "platform/file_dialogs.h"
 
 #include "IconsFontAwesome6.h"
-#include "ImGuiFileDialog.h"
 #include "imgui.h"
 
-#include <cfloat>
 #include <cstdio>
+#include <utility>
 
 namespace ui {
 
@@ -126,24 +126,22 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(20.0f, 10.0f));
 
     if (ImGui::Button(button_str, button_sz)) {
-        IGFD::FileDialogConfig cfg;
-        cfg.path  = ".";
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "HxEditerOpenFile", "Choose a file to open", ".*", cfg);
+        if (auto picked = platform::OpenFileDialog(
+                s.native_window_handle, "Choose a file to open")) {
+            if (out_pending_paths)
+                out_pending_paths->push_back(std::move(*picked));
+        }
     }
 
     y += button_sz.y + gap_between_buttons;
-    /* Second button: "Triage Folder..." opens a directory picker. Filter
-     * == nullptr puts ImGuiFileDialog into directory-selection mode (see
-     * ImGuiFileDialog README "directory chooser" section). */
+    /* Second button: "Triage Folder..." opens the OS-native folder picker. */
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
     if (ImGui::Button(button2_str, button_sz)) {
-        IGFD::FileDialogConfig cfg;
-        cfg.path  = ".";
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "HxEditerTriageFolder", "Choose a folder to triage", nullptr, cfg);
+        if (auto picked = platform::PickFolderDialog(
+                s.native_window_handle, "Choose a folder to triage")) {
+            if (out_pending_triage_root)
+                out_pending_triage_root->push_back(std::move(*picked));
+        }
     }
 
     ImGui::PopStyleVar(2);
@@ -161,27 +159,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 
     if (s.ui_font) ImGui::PopFont();
-
-    /* Must be called every frame for the dialog window to render. */
-    ImVec2 dlg_min(560.0f, 360.0f);
-    ImVec2 dlg_max(FLT_MAX, FLT_MAX);
-    if (ImGuiFileDialog::Instance()->Display(
-            "HxEditerOpenFile", ImGuiWindowFlags_NoCollapse, dlg_min, dlg_max)) {
-        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_paths) {
-            out_pending_paths->push_back(
-                ImGuiFileDialog::Instance()->GetFilePathName());
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-    if (ImGuiFileDialog::Instance()->Display(
-            "HxEditerTriageFolder", ImGuiWindowFlags_NoCollapse, dlg_min, dlg_max)) {
-        if (ImGuiFileDialog::Instance()->IsOk() && out_pending_triage_root) {
-            /* In directory-mode, GetCurrentPath() is the selected folder. */
-            out_pending_triage_root->push_back(
-                ImGuiFileDialog::Instance()->GetCurrentPath());
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
 
     char metric[32];
     if (s.startup_measured)

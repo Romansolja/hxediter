@@ -471,6 +471,10 @@ void SetContentScale(float scale) {
     g_state.content_scale = (scale < 1.0f) ? 1.0f : scale;
 }
 
+void SetNativeWindowHandle(void* handle) {
+    g_state.native_window_handle = handle;
+}
+
 bool ReadonlyDefault() {
     return g_state.readonly_default;
 }

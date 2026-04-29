@@ -49,17 +49,6 @@ fs::path AddCollisionSuffix(const fs::path& dst, int n) {
     return parent / oss.str();
 }
 
-/* Best-effort "starts_with" for fs::path on C++17. */
-bool PathStartsWith(const fs::path& candidate, const fs::path& prefix) {
-    auto cit = candidate.begin();
-    auto pit = prefix.begin();
-    for (; pit != prefix.end(); ++cit, ++pit) {
-        if (cit == candidate.end()) return false;
-        if (*cit != *pit) return false;
-    }
-    return true;
-}
-
 std::string IsoTimestampLocal() {
     using namespace std::chrono;
     auto now = system_clock::now();
@@ -163,7 +152,7 @@ std::vector<MoveResult> ExecuteMoves(
         fs::path can_dst = fs::weakly_canonical(op.dst, ec_dst);
         if (ec_dst) can_dst = op.dst;
 
-        if (!PathStartsWith(can_dst, can_root)) {
+        if (!PlatformPathStartsWith(can_dst, can_root)) {
             r.status        = MoveStatus::Rejected;
             r.error_message = "destination escapes scan root";
             out.push_back(std::move(r));

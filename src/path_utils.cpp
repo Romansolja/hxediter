@@ -32,8 +32,44 @@ bool IsReparsePoint(const std::filesystem::path& p) {
 
 }  /* namespace */
 
+bool PlatformPathStartsWith(const std::filesystem::path& candidate,
+                            const std::filesystem::path& prefix) {
+    auto cit = candidate.begin();
+    auto pit = prefix.begin();
+    for (; pit != prefix.end(); ++cit, ++pit) {
+        if (cit == candidate.end()) return false;
+        if (!PlatformBasenameEquals(PathToUtf8(*cit), PathToUtf8(*pit))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::filesystem::path PlatformPathRelative(const std::filesystem::path& abs,
+                                           const std::filesystem::path& root) {
+    /* Containment check honours the platform case policy. */
+    if (!PlatformPathStartsWith(abs, root)) return abs;
+
+    /* Re-walk the prefix to find where the suffix starts.
+     * std::filesystem::path::lexically_relative would do this in one
+     * call, but it compares components via path::operator== which is
+     * case-sensitive on Windows — that would diverge from our
+     * PlatformPathStartsWith result for a case-mismatched root, leaving
+     * the caller with the "..\..\..\Drive\..." escape form. Iterating
+     * here is O(N) again and the cost is irrelevant for paths. */
+    auto ait = abs.begin();
+    auto rit = root.begin();
+    for (; rit != root.end(); ++ait, ++rit) {}
+    std::filesystem::path out;
+    for (; ait != abs.end(); ++ait) {
+        out /= *ait;
+    }
+    return out;
+}
+
 void ExpandDirectoryInto(const std::filesystem::path& root,
-                         std::vector<std::string>& out) {
+                         std::vector<std::string>& out,
+                         const std::function<bool(const std::filesystem::path&)>& skip_dir) {
     /* Bail if the root itself is a reparse point. Otherwise a triage
      * scan of `<scan>/junction → C:\` would recurse into C:\ — cheaper
      * to refuse than to detect mid-walk and abort. The user can still
@@ -58,8 +94,16 @@ void ExpandDirectoryInto(const std::filesystem::path& root,
          * (which is regular-files-only); we just need to make sure we
          * don't descend into it. */
         bool is_dir = it->is_directory(step_ec);
-        if (!step_ec && is_dir && IsReparsePoint(it->path())) {
-            it.disable_recursion_pending();
+        if (!step_ec && is_dir) {
+            if (IsReparsePoint(it->path())) {
+                it.disable_recursion_pending();
+            } else if (skip_dir && skip_dir(it->path())) {
+                /* Caller-supplied prune (e.g. triage skips .git, .venv,
+                 * node_modules, __pycache__). Same mechanism as the
+                 * reparse-point guard — drop the recursion intent
+                 * before incrementing the iterator. */
+                it.disable_recursion_pending();
+            }
         }
 
         std::error_code reg_ec;
@@ -70,4 +114,9 @@ void ExpandDirectoryInto(const std::filesystem::path& root,
     }
     std::sort(collected.begin(), collected.end());
     for (const auto& p : collected) out.push_back(PathToUtf8(p));
+}
+
+void ExpandDirectoryInto(const std::filesystem::path& root,
+                         std::vector<std::string>& out) {
+    ExpandDirectoryInto(root, out, {});
 }

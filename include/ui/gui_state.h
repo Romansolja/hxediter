@@ -58,6 +58,11 @@ struct GuiState {
     float startup_duration_ms = 0.0f;
     bool  startup_measured    = false;
 
+    /* Opaque OS window handle (HWND on Windows). Set once at startup from
+     * glfwGetWin32Window so platform::OpenFileDialog / PickFolderDialog
+     * can parent the native dialog to the editor window. */
+    void* native_window_handle = nullptr;
+
     /* Last tab index the bar saw selected. The render uses the delta with
      * `*active_doc` to apply ImGuiTabItemFlags_SetSelected exactly once
      * after a programmatic switch (Ctrl+Tab, tab close), without overriding

@@ -19,6 +19,18 @@ const std::array<const char*, 5> kKnownJunkBasenames = {
     "Icon\r",   /* legacy macOS folder-icon stub; basename ends in CR (0x0D) */
 };
 
+/* Regenerable directories the scanner walks past entirely. Conservative
+ * list: each entry is unambiguous in practice (a user folder literally
+ * named ".git" is virtually always a git repo, etc.). We deliberately
+ * omit overloaded names like "build", "dist", "target", "out" — those
+ * hit too many false positives in non-developer datasets. */
+const std::array<const char*, 4> kKnownJunkFolderBasenames = {
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+};
+
 const char* VerdictName(Verdict v) {
     switch (v) {
         case Verdict::Useful:    return "Useful";
@@ -132,6 +144,14 @@ bool IsKnownJunkBasename(const std::filesystem::path& p) {
      * them as the same file. */
     const std::string name = p.filename().string();
     for (const char* known : kKnownJunkBasenames) {
+        if (PlatformBasenameEquals(name, known)) return true;
+    }
+    return false;
+}
+
+bool IsKnownJunkFolderBasename(const std::filesystem::path& p) {
+    const std::string name = p.filename().string();
+    for (const char* known : kKnownJunkFolderBasenames) {
         if (PlatformBasenameEquals(name, known)) return true;
     }
     return false;

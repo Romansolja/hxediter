@@ -1,5 +1,6 @@
 #include "triage/scanner.h"
 
+#include "triage/classifier.h"
 #include "triage/hasher.h"
 #include "path_utils.h"
 
@@ -96,11 +97,22 @@ bool WalkRoot(const fs::path& root,
         cfg.review_subfolder,
         cfg.duplicates_subfolder,
     };
-    auto is_skip = [&](const std::string& name) {
+    auto is_bucket_at_top = [&](const std::string& name) {
         for (const std::string& b : buckets) {
             if (PlatformBasenameEquals(name, b)) return true;
         }
         return false;
+    };
+
+    /* Predicate handed to ExpandDirectoryInto for the deep walk: prune
+     * the subtree when the directory's basename is on the regenerable
+     * list (.git, .venv, node_modules, __pycache__). Applied at every
+     * depth — files inside these never enter the verdict table.
+     * Bucket folders (`_junk`, `_review`, `_duplicates`) are NOT in
+     * this predicate; they're skipped only at the top level (deeply
+     * nested user folders happening to share these names survive). */
+    auto skip_subtree = [](const fs::path& p) {
+        return IsKnownJunkFolderBasename(p);
     };
 
     std::error_code ec;
@@ -123,9 +135,11 @@ bool WalkRoot(const fs::path& root,
 
         if (!ec_isdir && is_dir) {
             const std::string name = entry.path().filename().string();
-            if (!is_skip(name)) {
+            const bool top_skip   = is_bucket_at_top(name);
+            const bool junk_skip  = IsKnownJunkFolderBasename(entry.path());
+            if (!top_skip && !junk_skip) {
                 std::vector<std::string> sub_paths;
-                ExpandDirectoryInto(entry.path(), sub_paths);
+                ExpandDirectoryInto(entry.path(), sub_paths, skip_subtree);
                 for (const std::string& s : sub_paths) {
                     if (cancel.load(std::memory_order_relaxed)) return true;
                     fs::path p = PathFromUtf8(s);

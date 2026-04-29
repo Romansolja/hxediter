@@ -107,6 +107,18 @@ extern const std::array<const char*, 5> kKnownJunkBasenames;
 /* True iff path's basename matches kKnownJunkBasenames exactly. */
 bool IsKnownJunkBasename(const std::filesystem::path& p);
 
+/* Folder-level analogue: directory basenames whose entire subtree is
+ * skipped during a triage scan — regenerable build / cache / package
+ * directories. Files inside these never reach the classifier, so they
+ * don't show up in the verdict table at all (vs. being classified as
+ * Junk, which would still surface them and slow the walk). The skip
+ * applies at every depth, not just at the scan root. Comparison goes
+ * through PlatformBasenameEquals so `.Venv` matches on NTFS. */
+extern const std::array<const char*, 4> kKnownJunkFolderBasenames;
+
+/* True iff path's basename matches kKnownJunkFolderBasenames. */
+bool IsKnownJunkFolderBasename(const std::filesystem::path& p);
+
 /* Single-file synchronous classification. Reads up to the first
  * kSignaturePeekBytes bytes of the file for signature matching when
  * cfg.enable_signatures is on. Does NOT compute content_hash or

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,18 @@ inline std::string PathToGenericUtf8(const std::filesystem::path& p) {
 void ExpandDirectoryInto(const std::filesystem::path& root,
                          std::vector<std::string>& out);
 
+/* Same as the two-arg overload, but `skip_dir` is consulted for every
+ * subdirectory encountered mid-walk. Returning true prunes the entire
+ * subtree (the directory's contents are not added and not recursed
+ * into). The predicate is NOT applied to `root` itself. Used by the
+ * triage scanner to skip regenerable folders (.git, .venv,
+ * node_modules, __pycache__) at any depth without blowing the walk
+ * budget on their contents. An empty / null target falls back to the
+ * unfiltered behaviour. */
+void ExpandDirectoryInto(const std::filesystem::path& root,
+                         std::vector<std::string>& out,
+                         const std::function<bool(const std::filesystem::path&)>& skip_dir);
+
 /* Filesystem-aware basename equality. On Windows, NTFS treats _Junk and
  * _junk as the same folder, so any code that compares basenames against
  * a known set (top-level subfolder skip, known-junk basename rule)
@@ -65,3 +78,21 @@ inline bool PlatformBasenameEquals(const std::string& a, const std::string& b) {
     return a == b;
 #endif
 }
+
+/* Path-component containment: true iff `prefix` is an ancestor of (or equal
+ * to) `candidate`, comparing component-by-component under the same
+ * platform case policy as PlatformBasenameEquals. Operates on path
+ * components, so a sibling like `<root>_backup` is correctly NOT
+ * considered to start with `<root>`. Used as the destination-escape
+ * guard in the move executor — getting this right per platform matters
+ * because it's a control-boundary check. */
+bool PlatformPathStartsWith(const std::filesystem::path& candidate,
+                            const std::filesystem::path& prefix);
+
+/* Strip `root` from the front of `abs` and return the remainder, when
+ * `abs` is contained in `root` per PlatformPathStartsWith. Falls back to
+ * returning `abs` unchanged if the containment check fails. Honours the
+ * Windows case policy, so a path stored as `C:\Foo\bar.txt` against
+ * a configured root `c:\foo` yields `bar.txt`. */
+std::filesystem::path PlatformPathRelative(const std::filesystem::path& abs,
+                                           const std::filesystem::path& root);

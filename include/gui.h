@@ -33,6 +33,11 @@ void SetStartupDuration(float duration_ms);
  * (help panel width, etc.) can multiply hardcoded pixel constants. */
 void SetContentScale(float scale);
 
+/* Called once at startup with the OS window handle (HWND on Windows,
+ * cast to void*). Stored on GuiState so the start screen can parent the
+ * native Open / Pick-Folder dialogs to the editor window. */
+void SetNativeWindowHandle(void* handle);
+
 /* Snapshot of the GuiState read-only default toggle. main.cpp consults
  * this right after constructing a HexEditorCore so the "Open files as
  * read-only" setting applies to newly loaded files. */
