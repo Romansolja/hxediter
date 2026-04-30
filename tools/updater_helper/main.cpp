@@ -18,6 +18,8 @@
 #include <shellapi.h>
 #include <cwchar>
 #include <cstdlib>
+#include <cstdio>
+#include <string>
 
 static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
     while (*prefix) {
@@ -27,6 +29,37 @@ static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
         if (a != b) return false;
     }
     return true;
+}
+
+
+static std::wstring LocalAppDataDir() {
+    wchar_t base[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return L"";
+    std::wstring dir = base;
+    dir += L"\\HxEditer";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir;
+}
+
+static void WriteFailureLog(const wchar_t* msg, INT_PTR code) {
+    std::wstring dir = LocalAppDataDir();
+    if (dir.empty()) return;
+    std::wstring path = dir + L"\\updater.log";
+    FILE* fp = _wfopen(path.c_str(), L"wb");
+    if (!fp) return;
+    wchar_t line[256];
+    swprintf(line, 256, L"runas launch failed: %s (code %lld)\r\n",
+             msg ? msg : L"unknown", (long long)code);
+    fputws(line, fp);
+    fclose(fp);
+}
+
+static void ClearFailureLog() {
+    std::wstring dir = LocalAppDataDir();
+    if (dir.empty()) return;
+    std::wstring path = dir + L"\\updater.log";
+    DeleteFileW(path.c_str());
 }
 
 static bool InstallerPathLooksSafe(LPCWSTR path) {
@@ -94,6 +127,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     LocalFree(argv);
 
-    if ((INT_PTR)r <= 32) return 2;
+    if ((INT_PTR)r <= 32) {
+        WriteFailureLog(L"ShellExecuteW(runas)", (INT_PTR)r);
+        return 2;
+    }
+
+    ClearFailureLog();
     return 0;
 }

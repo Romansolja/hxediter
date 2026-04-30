@@ -55,4 +55,7 @@ void SetLaunchError(std::string msg);
  * Settings popup doesn't strand the download. */
 bool ConsumeInstallerPath(std::string& out_path);
 
+/* Reads and clears updater-helper failure log from the previous run. */
+bool ConsumeLastLaunchFailure(std::string& out_message);
+
 } /* namespace updater */
