@@ -26,6 +26,7 @@ struct Snapshot {
     DownloadState download      = DownloadState::Idle;
     std::string   latest_version;
     std::string   error_message;
+    std::string   launch_error;
     uint64_t      bytes_received = 0;
     uint64_t      bytes_total    = 0;
     std::string   installer_path;

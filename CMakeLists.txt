@@ -159,6 +159,7 @@ endif()
 # uninstall-before-install step can delete the installed copy freely.
 # ---------------------------------------------------------------------------
 add_executable(hxediter-updater-helper WIN32 tools/updater_helper/main.cpp)
+target_link_libraries(hxediter-updater-helper PRIVATE shell32)
 if(MINGW)
     target_link_options(hxediter-updater-helper PRIVATE -static -mwindows)
 endif()

@@ -17,12 +17,14 @@
  * on the next startup and surfaces the message in Settings -> Updates.
  */
 
+#ifndef _WIN32_WINNT
+#  define _WIN32_WINNT 0x0601
+#endif
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 #include <cwchar>
-#include <cstdio>
-#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <string>
@@ -52,16 +54,14 @@ static std::wstring LocalAppDataDir() {
     return dir;
 }
 
-static void WriteFailureLog(const wchar_t* msg, INT_PTR code) {
+static void WriteFailureLog(const char* msg, INT_PTR code) {
     std::wstring dir = LocalAppDataDir();
     if (dir.empty()) return;
     std::wstring path = dir + L"\\last_update_failure.txt";
-    char line[256];
-    std::snprintf(line, sizeof(line), "runas launch failed: %ls (code %lld)",
-                  msg ? msg : L"unknown", (long long)code);
     std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
     if (!out) return; /* Best-effort marker file. */
-    out.write(line, (std::streamsize)std::strlen(line));
+    out << "runas launch failed: " << (msg ? msg : "unknown")
+        << " (code " << (long long)code << ")";
 }
 
 static void ClearFailureLog() {
@@ -137,7 +137,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     LocalFree(argv);
 
     if ((INT_PTR)r <= 32) {
-        WriteFailureLog(L"ShellExecuteW(runas)", (INT_PTR)r);
+        WriteFailureLog("ShellExecuteW(runas)", (INT_PTR)r);
         return 2;
     }
 
