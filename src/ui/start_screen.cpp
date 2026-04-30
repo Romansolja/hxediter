@@ -14,6 +14,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
                        int drag_over_state,
+                       std::vector<std::string>* out_pending_directories,
                        std::vector<std::string>* out_pending_triage_root) {
     ImVec2 avail  = ImGui::GetContentRegionAvail();
     ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -37,12 +38,13 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     const char* title_str   = "HxEditer";
     const char* icon_str    = ICON_FA_FILE;
-    const char* drop_str    = "Drag and drop a file here";
+    const char* drop_str    = "Drag and drop a file or folder here";
     const char* button_str  = "Select File";
+    const char* button_folder_str = "Open Folder...";
     const char* button2_str = "Triage Folder...";
     const float gap_between_buttons = 12.0f;
 
-    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button2_label_sz;
+    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button_folder_label_sz, button2_label_sz;
 
     if (s.title_font) ImGui::PushFont(s.title_font);
     title_sz = ImGui::CalcTextSize(title_str);
@@ -57,16 +59,18 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 
     if (s.ui_font) ImGui::PushFont(s.ui_font);
-    drop_sz          = ImGui::CalcTextSize(drop_str);
-    button_label_sz  = ImGui::CalcTextSize(button_str);
-    button2_label_sz = ImGui::CalcTextSize(button2_str);
+    drop_sz                 = ImGui::CalcTextSize(drop_str);
+    button_label_sz         = ImGui::CalcTextSize(button_str);
+    button_folder_label_sz  = ImGui::CalcTextSize(button_folder_str);
+    button2_label_sz        = ImGui::CalcTextSize(button2_str);
     if (s.ui_font) ImGui::PopFont();
 
     ImGuiStyle& style = ImGui::GetStyle();
-    /* Both buttons share the wider of the two label widths so they line
-     * up vertically. Heights are equal because text height is identical. */
-    const float button_label_w = (button_label_sz.x > button2_label_sz.x)
-                                   ? button_label_sz.x : button2_label_sz.x;
+    /* All three buttons share the widest label width so they line up
+     * vertically. Heights are equal because text height is identical. */
+    float button_label_w = button_label_sz.x;
+    if (button_folder_label_sz.x > button_label_w) button_label_w = button_folder_label_sz.x;
+    if (button2_label_sz.x       > button_label_w) button_label_w = button2_label_sz.x;
     ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f,
                      button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f);
 
@@ -79,6 +83,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                 + title_sz.y + gap_title_to_drop
                 + drop_sz.y  + gap_drop_to_button
                 + button_sz.y
+                + gap_between_buttons + button_sz.y
                 + gap_between_buttons + button_sz.y;
     if (load_error && *load_error)
         col_h += gap_button_to_err + ImGui::GetTextLineHeight();
@@ -134,7 +139,21 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 
     y += button_sz.y + gap_between_buttons;
-    /* Second button: "Triage Folder..." opens the OS-native folder picker. */
+    /* Second button: "Open Folder..." picks a directory and surfaces its
+     * files in the tab-bar dropdown — same destination as a folder
+     * drag-drop or a folder passed on the CLI. Distinct from triage,
+     * which moves files into _junk/_review/_duplicates buckets. */
+    ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
+    if (ImGui::Button(button_folder_str, button_sz)) {
+        if (auto picked = platform::PickFolderDialog(
+                s.native_window_handle, "Choose a folder to open")) {
+            if (out_pending_directories)
+                out_pending_directories->push_back(std::move(*picked));
+        }
+    }
+
+    y += button_sz.y + gap_between_buttons;
+    /* Third button: "Triage Folder..." opens the OS-native folder picker. */
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
     if (ImGui::Button(button2_str, button_sz)) {
         if (auto picked = platform::PickFolderDialog(

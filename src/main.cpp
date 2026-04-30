@@ -611,6 +611,7 @@ int main(int argc, char* argv[]) {
                           &ctx.directory_files,
                           &ctx.directory_label,
                           &clear_directory,
+                          &ctx.pending_directories,
                           &ctx.pending_triage_root,
                           &request_triage_back);
 

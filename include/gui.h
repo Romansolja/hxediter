@@ -86,5 +86,6 @@ void RenderHexEditorUI(AppState state,
                        const std::vector<std::string>* directory_files,
                        const std::string* directory_label,
                        bool* out_clear_directory,
+                       std::vector<std::string>* out_pending_directories,
                        std::vector<std::string>* out_pending_triage_root,
                        bool* out_request_triage_back);
