@@ -130,10 +130,10 @@ std::wstring LocalAppDataDir() {
 }
 
 
-std::wstring LaunchFailureLogFile() {
+std::wstring LaunchFailureMarkerFile() {
     std::wstring d = LocalAppDataDir();
     if (d.empty()) return L"";
-    return d + L"\\updater.log";
+    return d + L"\\last_update_failure.txt";
 }
 
 std::wstring DebounceStateFile() {
@@ -736,7 +736,7 @@ bool ConsumeInstallerPath(std::string& out_path) {
 
 
 bool ConsumeLastLaunchFailure(std::string& out_message) {
-    std::wstring f = LaunchFailureLogFile();
+    std::wstring f = LaunchFailureMarkerFile();
     if (f.empty()) return false;
 
     std::ifstream in(f.c_str(), std::ios::binary);
@@ -748,7 +748,11 @@ bool ConsumeLastLaunchFailure(std::string& out_message) {
     in.close();
     DeleteFileW(f.c_str());
 
-    while (!raw.empty() && (raw.back() == '\n' || raw.back() == '\r')) raw.pop_back();
+    while (!raw.empty()) {
+        char c = raw.back();
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') break;
+        raw.pop_back();
+    }
     if (raw.empty()) return false;
 
     out_message = "Last update attempt failed: " + raw;

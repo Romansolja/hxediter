@@ -11,15 +11,22 @@
  * match the HxEditer-*-win64.exe naming. Without this, anything that can
  * spawn the helper could get an arbitrary exe elevated via the "runas"
  * verb below.
+ *
+ * On launch failure (e.g. UAC declined), writes a one-shot UTF-8 marker at
+ * %LOCALAPPDATA%\HxEditer\last_update_failure.txt; the main app consumes it
+ * on the next startup and surfaces the message in Settings -> Updates.
  */
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 #include <cwchar>
-#include <cstdlib>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <fstream>
 #include <string>
+#include <shlobj.h>
 
 static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
     while (*prefix) {
@@ -33,10 +40,13 @@ static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
 
 
 static std::wstring LocalAppDataDir() {
-    wchar_t base[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return L"";
-    std::wstring dir = base;
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path))) {
+        if (path) CoTaskMemFree(path);
+        return L"";
+    }
+    std::wstring dir = path;
+    CoTaskMemFree(path);
     dir += L"\\HxEditer";
     CreateDirectoryW(dir.c_str(), nullptr);
     return dir;
@@ -45,20 +55,19 @@ static std::wstring LocalAppDataDir() {
 static void WriteFailureLog(const wchar_t* msg, INT_PTR code) {
     std::wstring dir = LocalAppDataDir();
     if (dir.empty()) return;
-    std::wstring path = dir + L"\\updater.log";
-    FILE* fp = _wfopen(path.c_str(), L"wb");
-    if (!fp) return;
-    wchar_t line[256];
-    swprintf(line, 256, L"runas launch failed: %s (code %lld)\r\n",
-             msg ? msg : L"unknown", (long long)code);
-    fputws(line, fp);
-    fclose(fp);
+    std::wstring path = dir + L"\\last_update_failure.txt";
+    char line[256];
+    std::snprintf(line, sizeof(line), "runas launch failed: %ls (code %lld)",
+                  msg ? msg : L"unknown", (long long)code);
+    std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
+    if (!out) return; /* Best-effort marker file. */
+    out.write(line, (std::streamsize)std::strlen(line));
 }
 
 static void ClearFailureLog() {
     std::wstring dir = LocalAppDataDir();
     if (dir.empty()) return;
-    std::wstring path = dir + L"\\updater.log";
+    std::wstring path = dir + L"\\last_update_failure.txt";
     DeleteFileW(path.c_str());
 }
 
