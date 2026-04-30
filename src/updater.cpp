@@ -145,10 +145,13 @@ std::wstring TempInstallerPath(const std::string& version) {
     wchar_t tmp[MAX_PATH];
     DWORD n = GetTempPathW(MAX_PATH, tmp);
     if (n == 0 || n >= MAX_PATH) return L"";
+    /* Filename must match the helper's InstallerPathLooksSafe() pattern:
+     * HxEditer-*-win64.exe under %TEMP%. Mirroring the GitHub release
+     * asset name keeps the on-disk file recognizable too. */
     std::wstring path = tmp;
-    path += L"HxEditer-installer-";
+    path += L"HxEditer-";
     path += Utf8ToWide(version);
-    path += L".exe";
+    path += L"-win64.exe";
     return path;
 }
 

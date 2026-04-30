@@ -107,6 +107,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     if (!argv || argc < 3) {
+        WriteFailureLog("bad args (argc < 3)", argc);
         if (argv) LocalFree(argv);
         return 1;
     }
@@ -115,6 +116,16 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     DWORD   parent_pid     = (DWORD)_wtoi(argv[2]);
 
     if (!InstallerPathLooksSafe(installer_path)) {
+        int n = WideCharToMultiByte(CP_UTF8, 0, installer_path, -1,
+                                    nullptr, 0, nullptr, nullptr);
+        std::string path_utf8;
+        if (n > 1) {
+            path_utf8.resize(n - 1);
+            WideCharToMultiByte(CP_UTF8, 0, installer_path, -1,
+                                path_utf8.data(), n, nullptr, nullptr);
+        }
+        std::string msg = "installer path rejected by safety check: " + path_utf8;
+        WriteFailureLog(msg.c_str(), 0);
         LocalFree(argv);
         return 1;
     }
