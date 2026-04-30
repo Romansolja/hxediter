@@ -441,6 +441,14 @@ int main(int argc, char* argv[]) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 130");
 
+#ifdef _WIN32
+    {
+        std::string last_update_failure;
+        if (updater::ConsumeLastLaunchFailure(last_update_failure)) {
+            updater::SetLaunchError(last_update_failure);
+        }
+    }
+#endif
     updater::InitAndMaybeCheck();
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);

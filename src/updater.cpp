@@ -129,6 +129,12 @@ std::wstring LocalAppDataDir() {
     return dir;
 }
 
+std::wstring LaunchFailureMarkerFile() {
+    std::wstring d = LocalAppDataDir();
+    if (d.empty()) return L"";
+    return d + L"\\last_update_failure.txt";
+}
+
 std::wstring DebounceStateFile() {
     std::wstring d = LocalAppDataDir();
     if (d.empty()) return L"";
@@ -567,6 +573,8 @@ void DoDownload() {
     Snapshot snap;
     WithSnap([&](Snapshot& s) {
         s.download = DownloadState::InProgress;
+        s.error_message.clear();
+        s.launch_error.clear();
         s.bytes_received = 0;
         s.bytes_total    = 0;
         s.installer_path.clear();
@@ -708,7 +716,7 @@ void RequestAbandon() {
 void SetLaunchError(std::string msg) {
     WithSnap([&](Snapshot& s) {
         s.download       = DownloadState::Failed;
-        s.error_message  = std::move(msg);
+        s.launch_error   = std::move(msg);
         s.installer_path.clear();
     });
 }
@@ -723,6 +731,30 @@ bool ConsumeInstallerPath(std::string& out_path) {
     g_snap.download       = DownloadState::Idle;
     g_snap.bytes_received = 0;
     g_snap.bytes_total    = 0;
+    return true;
+}
+
+bool ConsumeLastLaunchFailure(std::string& out_message) {
+    std::wstring f = LaunchFailureMarkerFile();
+    if (f.empty()) return false;
+
+    std::ifstream in(f.c_str(), std::ios::binary);
+    if (!in) return false;
+
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string raw = ss.str();
+    in.close();
+    DeleteFileW(f.c_str());
+
+    while (!raw.empty()) {
+        char c = raw.back();
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') break;
+        raw.pop_back();
+    }
+    if (raw.empty()) return false;
+
+    out_message = "Last update attempt failed: " + raw;
     return true;
 }
 

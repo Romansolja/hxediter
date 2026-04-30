@@ -26,6 +26,7 @@ struct Snapshot {
     DownloadState download      = DownloadState::Idle;
     std::string   latest_version;
     std::string   error_message;
+    std::string   launch_error;
     uint64_t      bytes_received = 0;
     uint64_t      bytes_total    = 0;
     std::string   installer_path;
@@ -54,5 +55,8 @@ void SetLaunchError(std::string msg);
  * Decouples the handoff from popup visibility so a focus-dismissed
  * Settings popup doesn't strand the download. */
 bool ConsumeInstallerPath(std::string& out_path);
+
+/* Reads and clears updater-helper failure log from the previous run. */
+bool ConsumeLastLaunchFailure(std::string& out_message);
 
 } /* namespace updater */

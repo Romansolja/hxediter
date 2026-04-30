@@ -11,13 +11,24 @@
  * match the HxEditer-*-win64.exe naming. Without this, anything that can
  * spawn the helper could get an arbitrary exe elevated via the "runas"
  * verb below.
+ *
+ * On launch failure (e.g. UAC declined), writes a one-shot UTF-8 marker at
+ * %LOCALAPPDATA%\HxEditer\last_update_failure.txt; the main app consumes it
+ * on the next startup and surfaces the message in Settings -> Updates.
  */
+
+#ifndef _WIN32_WINNT
+#  define _WIN32_WINNT 0x0601
+#endif
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
 #include <cwchar>
 #include <cstdlib>
+#include <fstream>
+#include <string>
+#include <shlobj.h>
 
 static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
     while (*prefix) {
@@ -27,6 +38,37 @@ static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
         if (a != b) return false;
     }
     return true;
+}
+
+
+static std::wstring LocalAppDataDir() {
+    PWSTR path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &path))) {
+        if (path) CoTaskMemFree(path);
+        return L"";
+    }
+    std::wstring dir = path;
+    CoTaskMemFree(path);
+    dir += L"\\HxEditer";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir;
+}
+
+static void WriteFailureLog(const char* msg, INT_PTR code) {
+    std::wstring dir = LocalAppDataDir();
+    if (dir.empty()) return;
+    std::wstring path = dir + L"\\last_update_failure.txt";
+    std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
+    if (!out) return; /* Best-effort marker file. */
+    out << "runas launch failed: " << (msg ? msg : "unknown")
+        << " (code " << (long long)code << ")";
+}
+
+static void ClearFailureLog() {
+    std::wstring dir = LocalAppDataDir();
+    if (dir.empty()) return;
+    std::wstring path = dir + L"\\last_update_failure.txt";
+    DeleteFileW(path.c_str());
 }
 
 static bool InstallerPathLooksSafe(LPCWSTR path) {
@@ -94,6 +136,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
     LocalFree(argv);
 
-    if ((INT_PTR)r <= 32) return 2;
+    if ((INT_PTR)r <= 32) {
+        WriteFailureLog("ShellExecuteW(runas)", (INT_PTR)r);
+        return 2;
+    }
+
+    ClearFailureLog();
     return 0;
 }

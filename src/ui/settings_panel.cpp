@@ -98,7 +98,10 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
     } else if (snap.download == updater::DownloadState::Failed) {
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.5f, 0.5f, 1.0f));
-        ImGui::TextWrapped("%s", snap.error_message.c_str());
+        const char* msg = !snap.launch_error.empty()
+            ? snap.launch_error.c_str()
+            : snap.error_message.c_str();
+        ImGui::TextWrapped("%s", msg);
         ImGui::PopStyleColor();
     }
 
