@@ -196,11 +196,17 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     Sleep(1500);
 
     SHELLEXECUTEINFOW sei{};
-    sei.cbSize = sizeof(sei);
-    sei.fMask  = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
-    sei.lpVerb = L"runas";
-    sei.lpFile = installer_path;
-    sei.nShow  = SW_SHOWNORMAL;
+    sei.cbSize      = sizeof(sei);
+    sei.fMask       = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb      = L"runas";
+    sei.lpFile      = installer_path;
+    /* /S puts NSIS in silent mode: skips the "uninstall first?" prompt,
+     * skips the wizard, auto-confirms everything. The user already
+     * consented by clicking "Install and restart" + accepting UAC; a
+     * third confirmation dialog is noise. Failures still surface via
+     * the installer's exit code (caught below). */
+    sei.lpParameters = L"/S";
+    sei.nShow       = SW_HIDE;
 
     DebugLog("ShellExecuteExW begin verb=runas");
     BOOL ok = ShellExecuteExW(&sei);
