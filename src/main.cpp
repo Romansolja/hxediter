@@ -267,10 +267,23 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
                         (int)installer_path_utf8.size(),
                         winst.data(), wide_n);
 
-    /* Installer path may contain spaces — quote it. */
+    /* Installer path may contain spaces — quote it.
+     * %ls (not %s) for the wide path: on MinGW-MSVCRT, wide swprintf
+     * treats %s as char*, so a wchar_t* gets read as bytes and stops at
+     * the first NUL — collapsing "C:\Users\..." to "C". */
     wchar_t args[MAX_PATH + 64];
-    swprintf(args, MAX_PATH + 64, L"\"%s\" %lu",
+    swprintf(args, MAX_PATH + 64, L"\"%ls\" %lu",
              winst.c_str(), (unsigned long)GetCurrentProcessId());
+
+    {
+        int wlen = (int)wcslen(args);
+        int u8_len = WideCharToMultiByte(CP_UTF8, 0, args, wlen,
+                                         nullptr, 0, nullptr, nullptr);
+        std::string u8(u8_len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, args, wlen,
+                            u8.data(), u8_len, nullptr, nullptr);
+        DebugLog("LaunchUpdaterHelper args=\"%s\"", u8.c_str());
+    }
 
     HINSTANCE r = ShellExecuteW(nullptr, L"open", temp_helper.c_str(),
                                  args, nullptr, SW_SHOWNORMAL);
