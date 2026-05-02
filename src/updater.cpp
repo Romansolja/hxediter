@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -139,6 +140,87 @@ std::wstring DebounceStateFile() {
     std::wstring d = LocalAppDataDir();
     if (d.empty()) return L"";
     return d + L"\\update_state.json";
+}
+
+std::wstring DebugLogFile() {
+    std::wstring d = LocalAppDataDir();
+    if (d.empty()) return L"";
+    return d + L"\\update_debug.log";
+}
+
+void DebugLog(const char* tag, const char* fmt, ...) {
+    std::wstring path = DebugLogFile();
+    if (path.empty()) return;
+
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char ts[32];
+    std::snprintf(ts, sizeof(ts), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+                  st.wYear, st.wMonth, st.wDay,
+                  st.wHour, st.wMinute, st.wSecond);
+
+    char body[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+
+    std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
+    if (!out) return;
+    out << ts << " [" << tag << "] " << body << "\r\n";
+}
+
+/* Truncate the debug log on startup if it has grown beyond ~256 KB so
+ * users running the updater across many sessions don't accumulate an
+ * unbounded log file. */
+void DebugLogRotateIfNeeded() {
+    std::wstring path = DebugLogFile();
+    if (path.empty()) return;
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER sz{};
+    BOOL got = GetFileSizeEx(h, &sz);
+    CloseHandle(h);
+    if (got && sz.QuadPart > 256 * 1024) {
+        DeleteFileW(path.c_str());
+    }
+}
+
+/* Each helper invocation copies itself to %TEMP%\hxediter-updater-helper-<pid>.exe
+ * and never cleans up. Sweep stale ones on hxediter startup so %TEMP%
+ * doesn't accumulate dozens of leftover binaries over time. */
+void CleanStaleTempHelpers() {
+    wchar_t tmp[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, tmp);
+    if (n == 0 || n >= MAX_PATH) return;
+    std::wstring pattern = std::wstring(tmp) + L"hxediter-updater-helper-*.exe";
+
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    FILETIME now_ft;
+    GetSystemTimeAsFileTime(&now_ft);
+    ULARGE_INTEGER now;
+    now.LowPart  = now_ft.dwLowDateTime;
+    now.HighPart = now_ft.dwHighDateTime;
+    /* FILETIME is in 100ns ticks; one hour == 36 billion. */
+    constexpr ULONGLONG kHour100ns = 36000000000ULL;
+
+    do {
+        ULARGE_INTEGER w;
+        w.LowPart  = fd.ftLastWriteTime.dwLowDateTime;
+        w.HighPart = fd.ftLastWriteTime.dwHighDateTime;
+        if (now.QuadPart > w.QuadPart &&
+            (now.QuadPart - w.QuadPart) > kHour100ns) {
+            std::wstring full = std::wstring(tmp) + fd.cFileName;
+            DeleteFileW(full.c_str());  /* best-effort: file may be in use */
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
 }
 
 std::wstring TempInstallerPath(const std::string& version) {
@@ -479,13 +561,19 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
         if (!j.contains("assets") || !j["assets"].is_array()) {
             err = "no assets"; return std::nullopt;
         }
+        auto ends_with = [](const std::string& s, const char* suffix) {
+            size_t n = std::strlen(suffix);
+            return s.size() >= n &&
+                   s.compare(s.size() - n, n, suffix) == 0;
+        };
         for (const auto& a : j["assets"]) {
             std::string name = a.value("name", "");
             std::string url  = a.value("browser_download_url", "");
             if (name.empty() || url.empty()) continue;
-            if (name.size() > 10 &&
-                name.rfind("HxEditer-", 0) == 0 &&
-                name.find("-win64.exe") != std::string::npos) {
+            /* Suffix check, not substring — defends against any future
+             * sibling like "HxEditer-X.Y.Z-win64.exe.asc" being picked
+             * over the actual installer. */
+            if (name.rfind("HxEditer-", 0) == 0 && ends_with(name, "-win64.exe")) {
                 r.installer_url = url;
                 r.installer_name = name;
             } else if (name == "SHA256SUMS.txt") {
@@ -493,6 +581,9 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
             }
         }
         if (r.installer_url.empty()) { err = "no installer asset"; return std::nullopt; }
+        DebugLog("updater", "ParseRelease tag=%s installer=%s sums_url_present=%d",
+                 r.tag_name.c_str(), r.installer_name.c_str(),
+                 r.sums_url.empty() ? 0 : 1);
         return r;
     } catch (const std::exception& e) {
         err = std::string("json: ") + e.what();
@@ -506,6 +597,8 @@ void DoCheck(bool force) {
     if (!g_check_in_flight.compare_exchange_strong(expected, true)) return;
     struct Releaser { ~Releaser() { g_check_in_flight.store(false); } } rel;
 
+    DebugLog("updater", "DoCheck begin");
+
     WithSnap([](Snapshot& s) {
         s.check = CheckState::InProgress;
         s.error_message.clear();
@@ -515,6 +608,7 @@ void DoCheck(bool force) {
         + kRepoOwner + "/" + kRepoName + "/releases/latest";
     std::string body; std::string err;
     if (!HttpGetString(Utf8ToWide(api_url_u8), body, err)) {
+        DebugLog("updater", "DoCheck NetworkError: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.check = CheckState::NetworkError;
@@ -525,6 +619,7 @@ void DoCheck(bool force) {
 
     auto rel_info = ParseRelease(body, err);
     if (!rel_info) {
+        DebugLog("updater", "DoCheck ParseError: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.check = CheckState::ParseError;
@@ -536,6 +631,8 @@ void DoCheck(bool force) {
     auto latest = ParseVersion(rel_info->tag_name);
     auto ours   = ParseVersion(APP_VERSION);
     if (!latest || !ours) {
+        DebugLog("updater", "DoCheck ParseError: bad version strings (tag=%s app=%s)",
+                 rel_info->tag_name.c_str(), APP_VERSION);
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.check = CheckState::ParseError;
@@ -556,11 +653,15 @@ void DoCheck(bool force) {
 
     if (AbandonRequested()) return;
     if (CompareVersions(*latest, *ours) > 0) {
+        DebugLog("updater", "DoCheck UpdateAvailable latest=%s ours=%s",
+                 latest_str.c_str(), APP_VERSION);
         WithSnap([&](Snapshot& s) {
             s.check          = CheckState::UpdateAvailable;
             s.latest_version = latest_str;
         });
     } else {
+        DebugLog("updater", "DoCheck UpToDate latest=%s ours=%s",
+                 latest_str.c_str(), APP_VERSION);
         WithSnap([&](Snapshot& s) {
             s.check          = CheckState::UpToDate;
             s.latest_version = latest_str;
@@ -572,6 +673,8 @@ void DoDownload() {
     bool expected = false;
     if (!g_download_in_flight.compare_exchange_strong(expected, true)) return;
     struct Releaser { ~Releaser() { g_download_in_flight.store(false); } } rel;
+
+    DebugLog("updater", "DoDownload begin");
 
     Snapshot snap;
     WithSnap([&](Snapshot& s) {
@@ -590,6 +693,7 @@ void DoDownload() {
         + kRepoOwner + "/" + kRepoName + "/releases/latest";
     std::string body; std::string err;
     if (!HttpGetString(Utf8ToWide(api_url_u8), body, err)) {
+        DebugLog("updater", "DoDownload re-fetch failed: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
@@ -599,6 +703,7 @@ void DoDownload() {
     }
     auto rel_info = ParseRelease(body, err);
     if (!rel_info) {
+        DebugLog("updater", "DoDownload ParseRelease failed: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
@@ -607,6 +712,7 @@ void DoDownload() {
         return;
     }
     if (rel_info->sums_url.empty()) {
+        DebugLog("updater", "DoDownload aborted: SHA256SUMS.txt missing from release");
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Release is missing SHA256SUMS.txt — cannot verify download. Ask the maintainer to re-release with integrity manifest.";
@@ -616,6 +722,7 @@ void DoDownload() {
 
     std::string sums_body;
     if (!HttpGetString(Utf8ToWide(rel_info->sums_url), sums_body, err)) {
+        DebugLog("updater", "DoDownload SHA256SUMS fetch failed: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
@@ -625,6 +732,8 @@ void DoDownload() {
     }
     auto expected_sha = ExtractExpectedSha(sums_body, rel_info->installer_name);
     if (!expected_sha) {
+        DebugLog("updater", "DoDownload SHA256SUMS lookup miss for %s",
+                 rel_info->installer_name.c_str());
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "SHA256SUMS.txt has no entry for " + rel_info->installer_name;
@@ -636,6 +745,8 @@ void DoDownload() {
      * lands in the filename. */
     auto ours = ParseVersion(rel_info->tag_name);
     if (!ours) {
+        DebugLog("updater", "DoDownload unparseable tag: %s",
+                 rel_info->tag_name.c_str());
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Unparseable tag: " + rel_info->tag_name;
@@ -647,14 +758,18 @@ void DoDownload() {
         std::get<0>(*ours), std::get<1>(*ours), std::get<2>(*ours));
     std::wstring dst = TempInstallerPath(vs);
     if (dst.empty()) {
+        DebugLog("updater", "DoDownload TempInstallerPath empty (GetTempPath failed)");
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "GetTempPath failed";
         });
         return;
     }
+    DebugLog("updater", "DoDownload version=%s dst=\"%s\"",
+             vs, WideToUtf8(dst).c_str());
 
     if (!HttpDownloadToFile(Utf8ToWide(rel_info->installer_url), dst, err)) {
+        DebugLog("updater", "DoDownload HttpDownloadToFile failed: %s", err.c_str());
         if (AbandonRequested()) return;
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
@@ -666,6 +781,7 @@ void DoDownload() {
     if (AbandonRequested()) return;
     auto got_sha = ComputeSha256(dst);
     if (!got_sha) {
+        DebugLog("updater", "DoDownload ComputeSha256 failed");
         DeleteFileW(dst.c_str());
         WithSnap([&](Snapshot& s) {
             s.download = DownloadState::Failed;
@@ -673,6 +789,9 @@ void DoDownload() {
         });
         return;
     }
+    DebugLog("updater", "DoDownload sha expected=%s got=%s match=%d",
+             expected_sha->c_str(), got_sha->c_str(),
+             (*got_sha == *expected_sha) ? 1 : 0);
     if (*got_sha != *expected_sha) {
         DeleteFileW(dst.c_str());
         WithSnap([&](Snapshot& s) {
@@ -684,6 +803,8 @@ void DoDownload() {
         return;
     }
 
+    DebugLog("updater", "DoDownload Complete installer_path=\"%s\"",
+             WideToUtf8(dst).c_str());
     WithSnap([&](Snapshot& s) {
         s.download       = DownloadState::Complete;
         s.installer_path = WideToUtf8(dst);
@@ -693,9 +814,16 @@ void DoDownload() {
 } /* anonymous namespace */
 
 void InitAndMaybeCheck() {
+    DebugLogRotateIfNeeded();
+    CleanStaleTempHelpers();
+    DebugLog("updater", "InitAndMaybeCheck app_version=%s", APP_VERSION);
     int64_t last = LoadLastCheckUnix();
     int64_t now  = NowUnix();
-    if (last > 0 && (now - last) < kDebounceSeconds) return;
+    if (last > 0 && (now - last) < kDebounceSeconds) {
+        DebugLog("updater", "InitAndMaybeCheck debounce skip (last=%lld now=%lld)",
+                 (long long)last, (long long)now);
+        return;
+    }
     StartCheck();
 }
 
@@ -717,6 +845,7 @@ void RequestAbandon() {
 }
 
 void SetLaunchError(std::string msg) {
+    DebugLog("updater", "SetLaunchError: %s", msg.c_str());
     WithSnap([&](Snapshot& s) {
         s.download       = DownloadState::Failed;
         s.launch_error   = std::move(msg);
@@ -729,6 +858,7 @@ bool ConsumeInstallerPath(std::string& out_path) {
     if (g_snap.download != DownloadState::Complete) return false;
     if (g_snap.installer_path.empty())               return false;
     out_path = std::move(g_snap.installer_path);
+    DebugLog("updater", "ConsumeInstallerPath -> \"%s\"", out_path.c_str());
     /* Keep check-state so the UI still reflects "new version exists" while
      * the installer runs. */
     g_snap.download       = DownloadState::Idle;

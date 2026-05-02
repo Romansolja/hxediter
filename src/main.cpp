@@ -18,6 +18,7 @@
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
 #  include <shellapi.h>
+#  include <shlobj.h>
 #  include <ole2.h>
 #  define GLFW_EXPOSE_NATIVE_WIN32
 #  include <GLFW/glfw3native.h>
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -158,28 +160,90 @@ static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
 }
 
 #ifdef _WIN32
+/* Mirror of updater::DebugLog so the main process can append to the same
+ * %LOCALAPPDATA%\HxEditer\update_debug.log file as updater.cpp and the
+ * helper. Kept file-static rather than added to the public updater API
+ * because nothing else needs it. */
+static void DebugLog(const char* fmt, ...) {
+    PWSTR known = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known))) {
+        if (known) CoTaskMemFree(known);
+        return;
+    }
+    std::wstring path = known;
+    CoTaskMemFree(known);
+    path += L"\\HxEditer";
+    CreateDirectoryW(path.c_str(), nullptr);
+    path += L"\\update_debug.log";
+
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char ts[32];
+    std::snprintf(ts, sizeof(ts), "%04u-%02u-%02uT%02u:%02u:%02uZ",
+                  st.wYear, st.wMonth, st.wDay,
+                  st.wHour, st.wMinute, st.wSecond);
+
+    char body[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(body, sizeof(body), fmt, ap);
+    va_end(ap);
+
+    std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
+    if (!out) return;
+    out << ts << " [main]    " << body << "\r\n";
+}
+
 /* NSIS can't delete a running binary from $INSTDIR, so the helper must run
  * from a copy in %TEMP%. */
 static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
                                 std::string& err_utf8) {
+    DebugLog("LaunchUpdaterHelper begin installer=\"%s\"",
+             installer_path_utf8.c_str());
+
     wchar_t exe_path[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) { err_utf8 = "GetModuleFileName failed"; return false; }
+    if (n == 0 || n >= MAX_PATH) {
+        err_utf8 = "GetModuleFileName failed";
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
+        return false;
+    }
 
     std::wstring exe_dir(exe_path);
     size_t slash = exe_dir.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) { err_utf8 = "bad exe path"; return false; }
+    if (slash == std::wstring::npos) {
+        err_utf8 = "bad exe path";
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
+        return false;
+    }
     exe_dir.resize(slash);
 
     std::wstring installed_helper = exe_dir + L"\\hxediter-updater-helper.exe";
-    if (GetFileAttributesW(installed_helper.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    bool helper_present =
+        GetFileAttributesW(installed_helper.c_str()) != INVALID_FILE_ATTRIBUTES;
+    {
+        int wide_len = (int)installed_helper.size();
+        int u8_len = WideCharToMultiByte(CP_UTF8, 0, installed_helper.c_str(),
+                                         wide_len, nullptr, 0, nullptr, nullptr);
+        std::string u8(u8_len, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, installed_helper.c_str(), wide_len,
+                            u8.data(), u8_len, nullptr, nullptr);
+        DebugLog("LaunchUpdaterHelper installed_helper=\"%s\" exists=%d",
+                 u8.c_str(), helper_present ? 1 : 0);
+    }
+    if (!helper_present) {
         err_utf8 = "updater helper is missing next to hxediter.exe";
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
         return false;
     }
 
     wchar_t tmp[MAX_PATH];
     DWORD tn = GetTempPathW(MAX_PATH, tmp);
-    if (tn == 0 || tn >= MAX_PATH) { err_utf8 = "GetTempPath failed"; return false; }
+    if (tn == 0 || tn >= MAX_PATH) {
+        err_utf8 = "GetTempPath failed";
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
+        return false;
+    }
     wchar_t helper_name[64];
     swprintf(helper_name, 64, L"hxediter-updater-helper-%lu.exe",
              (unsigned long)GetCurrentProcessId());
@@ -190,8 +254,11 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
         std::snprintf(buf, sizeof(buf), "CopyFile failed (err %lu)",
                       (unsigned long)GetLastError());
         err_utf8 = buf;
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
         return false;
     }
+    DebugLog("LaunchUpdaterHelper temp_helper copy_ok pid=%lu",
+             (unsigned long)GetCurrentProcessId());
 
     int wide_n = MultiByteToWideChar(CP_UTF8, 0, installer_path_utf8.c_str(),
                                      (int)installer_path_utf8.size(), nullptr, 0);
@@ -207,11 +274,14 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
 
     HINSTANCE r = ShellExecuteW(nullptr, L"open", temp_helper.c_str(),
                                  args, nullptr, SW_SHOWNORMAL);
+    DebugLog("LaunchUpdaterHelper ShellExecute(open) hInstApp=%lld",
+             (long long)(INT_PTR)r);
     if ((INT_PTR)r <= 32) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "ShellExecute failed (code %lld)",
                       (long long)(INT_PTR)r);
         err_utf8 = buf;
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
         return false;
     }
     return true;
@@ -445,7 +515,11 @@ int main(int argc, char* argv[]) {
     {
         std::string last_update_failure;
         if (updater::ConsumeLastLaunchFailure(last_update_failure)) {
+            DebugLog("startup ConsumeLastLaunchFailure -> \"%s\"",
+                     last_update_failure.c_str());
             updater::SetLaunchError(last_update_failure);
+        } else {
+            DebugLog("startup ConsumeLastLaunchFailure -> (no marker)");
         }
     }
 #endif
@@ -707,8 +781,10 @@ int main(int argc, char* argv[]) {
         if (!ctx.installer_to_launch.empty()) {
             std::string err;
             if (LaunchUpdaterHelper(ctx.installer_to_launch, err)) {
+                DebugLog("LaunchUpdaterHelper ok; closing window");
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             } else {
+                DebugLog("LaunchUpdaterHelper failed: %s", err.c_str());
                 updater::SetLaunchError("Could not start updater: " + err);
             }
             ctx.installer_to_launch.clear();
