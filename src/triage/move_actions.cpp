@@ -64,6 +64,37 @@ std::string IsoTimestampLocal() {
     return oss.str();
 }
 
+/* Emit a JSON-quoted string. We hand-roll this rather than pulling
+ * nlohmann/json into hxcore's link line — it's five string fields per
+ * record and the move-actions translation unit is otherwise dependency-
+ * free. Input is UTF-8 (the rest of the codebase keeps paths in UTF-8
+ * via PathToGenericUtf8), which JSON accepts verbatim above U+001F.
+ * Only ASCII control chars and the two reserved characters need escape. */
+void AppendJsonString(std::string& out, const std::string& s) {
+    out += '"';
+    for (char c : s) {
+        unsigned char b = static_cast<unsigned char>(c);
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b";  break;
+            case '\f': out += "\\f";  break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (b < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x", b);
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    out += '"';
+}
+
 }  /* namespace */
 
 std::vector<MoveOp> PlanAutoMoves(
@@ -195,8 +226,15 @@ std::vector<MoveResult> ExecuteMoves(
             const auto cross = std::make_error_code(std::errc::cross_device_link);
             if (ec_mv == cross) {
                 std::error_code ec_cp;
-                fs::copy_file(op.src, final_dst,
-                              fs::copy_options::overwrite_existing, ec_cp);
+                /* Default copy_options (no overwrite_existing) so the
+                 * cross-device path fails-on-exist symmetric with
+                 * fs::rename above. The collision-suffix walk in step 3
+                 * already guarantees final_dst doesn't exist at the
+                 * time of the check, but a TOCTOU racer that creates
+                 * final_dst between the check and here would otherwise
+                 * be silently overwritten on cross-device but not on
+                 * same-device — choose the safer (matching) behaviour. */
+                fs::copy_file(op.src, final_dst, ec_cp);
                 if (ec_cp) {
                     r.status        = MoveStatus::Failed;
                     r.error_message = "copy_file (cross-device): " + ec_cp.message();
@@ -234,29 +272,59 @@ std::vector<MoveResult> ExecuteMoves(
      * bucket(s) this batch touched — one canonical location across
      * runs, co-located with where users look first. Lazy-creates
      * the junk subfolder if no Junk move ran in this batch (rare
-     * edge case: e.g. a move-only-Duplicates batch with no Junk). */
+     * edge case: e.g. a move-only-Duplicates batch with no Junk).
+     *
+     * Format: JSON Lines (one JSON object per line). Switched from
+     * the previous "<status>|<src>|<dst>|<reason>|<error>" pipe-
+     * delimited format because POSIX paths can legally contain '|'
+     * — a tooling consumer parsing the old format had no way to
+     * recover the field boundaries. JSONL keeps the file
+     * line-streamable for grep, but each record is unambiguous. The
+     * file is written with extension .jsonl and starts with a
+     * single header record so consumers can sniff the format. */
     if (opts.write_audit_log && !out.empty()) {
         std::error_code ec_logdir;
         fs::path log_dir = root / cfg.junk_subfolder;
         fs::create_directories(log_dir, ec_logdir);
         if (!ec_logdir) {
-            fs::path log_path = log_dir / ("triage-log-" + IsoTimestampLocal() + ".txt");
-            std::ofstream log(log_path);
+            fs::path log_path = log_dir / ("triage-log-" + IsoTimestampLocal() + ".jsonl");
+            std::ofstream log(log_path, std::ios::binary);
             if (log) {
-                log << "# triage audit log " << IsoTimestampLocal() << "\n";
-                log << "# status|src|dst|reason|error\n";
+                std::string line;
+                line.reserve(256);
+
+                /* Header record. */
+                line.clear();
+                line += "{\"_format\":";
+                AppendJsonString(line, "triage-audit-jsonl-v1");
+                line += ",\"timestamp\":";
+                AppendJsonString(line, IsoTimestampLocal());
+                line += "}\n";
+                log.write(line.data(), (std::streamsize)line.size());
+
                 for (const MoveResult& r : out) {
                     const char* sk =
                         r.status == MoveStatus::Moved    ? "MOVED"    :
                         r.status == MoveStatus::Failed   ? "FAILED"   :
                         r.status == MoveStatus::Rejected ? "REJECTED" : "?";
-                    log << sk << "|"
-                        << PathToGenericUtf8(r.op.src) << "|"
-                        << (r.status == MoveStatus::Moved
-                              ? PathToGenericUtf8(r.final_dst)
-                              : PathToGenericUtf8(r.op.dst)) << "|"
-                        << VerdictName(r.op.bucket_reason) << "|"
-                        << r.error_message << "\n";
+                    const std::string dst_utf8 =
+                        (r.status == MoveStatus::Moved)
+                            ? PathToGenericUtf8(r.final_dst)
+                            : PathToGenericUtf8(r.op.dst);
+
+                    line.clear();
+                    line += "{\"status\":";
+                    AppendJsonString(line, sk);
+                    line += ",\"src\":";
+                    AppendJsonString(line, PathToGenericUtf8(r.op.src));
+                    line += ",\"dst\":";
+                    AppendJsonString(line, dst_utf8);
+                    line += ",\"reason\":";
+                    AppendJsonString(line, VerdictName(r.op.bucket_reason));
+                    line += ",\"error\":";
+                    AppendJsonString(line, r.error_message);
+                    line += "}\n";
+                    log.write(line.data(), (std::streamsize)line.size());
                 }
             }
         }

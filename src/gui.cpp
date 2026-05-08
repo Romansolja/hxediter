@@ -493,8 +493,6 @@ void RenderHexEditorUI(AppState state,
                        int* active_doc,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       std::string* out_installer_to_launch,
-                       std::string* out_installer_sha256,
                        int drag_over_state,
                        std::vector<int>* out_close_indices,
                        const std::vector<std::string>* directory_files,
@@ -685,7 +683,7 @@ void RenderHexEditorUI(AppState state,
         ImGui::OpenPopup("Settings##settings");
         s.show_settings = false;
     }
-    ui::RenderSettingsPopup(s, out_installer_to_launch, out_installer_sha256);
+    ui::RenderSettingsPopup(s);
 
     if (doc.conflict_modal_open) {
         ImGui::OpenPopup("File changed on disk##conflict");

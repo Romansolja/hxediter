@@ -17,7 +17,16 @@ Download the latest `HxEditer-X.Y.Z-win64.exe` from the
 [Releases](https://github.com/Romansolja/hxediter/releases) page and run it.
 The app will notify you automatically when a new version is out.
 
-Windows only, uses CMake. MinGW toolchain shipped with CLion is known to work.
+Windows only, uses CMake. Build is verified against the MinGW-w64 GCC
+toolchain shipped with JetBrains CLion 2026.1 (gcc 13.1.0 at the time
+of writing, located at `<CLion install>/bin/mingw/bin/`); newer
+versions in the same major series should also work but have not been
+exercised. CMake 3.14 or newer required.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model, the auto-updater
+trust assumptions, and how to report a vulnerability.
 
 ## License
 

@@ -45,13 +45,24 @@ namespace {
  * keeps the struct alive even after main() returns. Without this, an
  * in-flight ScanWorker (mid-walk on a huge tree, or mid-hash on a large
  * file) would lock a destroyed mutex and signal a destroyed condvar
- * once main returns. Same fix applied in updater.cpp. */
+ * once main returns. Same fix applied in updater.cpp.
+ *
+ * `active_workers` lets Reset() wait for in-flight outer workers to
+ * acknowledge the cancel/token-bump and exit before returning. Without
+ * it, a fast caller doing Reset() → StartScan() in immediate succession
+ * could have two zombie workers in the air at once: the pre-Reset one
+ * (still mid-walk, will exit on next token check) and the post-Start
+ * one (fresh token). Both are correct in isolation thanks to the token
+ * check, but the reviewer's read was that we relied on it by accident
+ * rather than by design — make the wait explicit. */
 struct ScannerState {
     std::mutex                  mx;
     ScanProgress                progress;
     std::atomic<bool>           cancel{false};
     std::atomic<int>            token{0};
     std::condition_variable     done_cv;
+    std::atomic<int>            active_workers{0};
+    std::condition_variable     worker_exit_cv;
 };
 
 std::shared_ptr<ScannerState> g_state = std::make_shared<ScannerState>();
@@ -410,6 +421,18 @@ void ScanWorker(std::shared_ptr<ScannerState> state,
                 FileVerdictCallback on_classified,
                 FileVerdictUpdateCallback on_dup_updated) {
     ScannerState& st = *state;
+    /* Reset() waits on worker_exit_cv until active_workers == 0 so a
+     * subsequent StartScan starts with no zombies in flight. RAII guard
+     * to make the dec+notify happen on every exit path. */
+    st.active_workers.fetch_add(1, std::memory_order_acq_rel);
+    struct ExitGuard {
+        ScannerState& st;
+        ~ExitGuard() {
+            st.active_workers.fetch_sub(1, std::memory_order_acq_rel);
+            st.worker_exit_cv.notify_all();
+        }
+    } exit_guard{st};
+
     auto token_alive = [&st, my_token]() {
         return st.token.load() == my_token && !st.cancel.load();
     };
@@ -521,8 +544,29 @@ void Reset() {
     ScannerState& st = *g_state;
     /* Increment the token first so any in-flight worker checking
      * st.token != my_token will treat itself as orphaned and not write
-     * back into st.progress. Then take the lock, reset state, drop. */
+     * back into st.progress. Set cancel as well so the inner thread
+     * pools (classify / hash) bail at their next per-file check
+     * regardless of the token race window. */
     st.token.fetch_add(1);
+    st.cancel.store(true);
+    st.done_cv.notify_all();
+
+    /* Wait briefly for outer workers (ScanWorker) to acknowledge.
+     * Workers check the token between every per-file step, so the
+     * window before they return is bounded by one classify or hash
+     * iteration. A 500 ms timeout is plenty in normal operation; if
+     * we hit it (ridiculously slow disk, OS-level I/O hang), we
+     * proceed anyway — the orphan worker still respects the token
+     * and won't corrupt the post-Reset state. */
+    {
+        std::unique_lock<std::mutex> lk(st.mx);
+        st.worker_exit_cv.wait_for(
+            lk, std::chrono::milliseconds(500),
+            [&st]() { return st.active_workers.load() == 0; });
+    }
+
+    /* Now safe to reset state cleanly: any worker still alive past the
+     * timeout will not write because of the bumped token. */
     st.cancel.store(false);
     {
         std::lock_guard<std::mutex> lk(st.mx);

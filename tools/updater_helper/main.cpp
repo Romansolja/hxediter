@@ -119,9 +119,26 @@ static void DebugLog(const char* fmt, ...) {
     std::vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
 
-    std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
-    if (!out) return;
-    out << ts << " [helper]  " << body << "\r\n";
+    /* Atomic-append via single-shot WriteFile under FILE_APPEND_DATA.
+     * The helper writes to this file concurrently with the main app
+     * (which is the entire point of the helper); std::ofstream in
+     * append mode does not guarantee write atomicity, so two writers
+     * could otherwise interleave inside one line. NTFS guarantees
+     * atomic append for writes shorter than the volume sector size. */
+    char line[1280];
+    int  ln = std::snprintf(line, sizeof(line), "%s [helper]  %s\r\n", ts, body);
+    if (ln <= 0) return;
+    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+
+    HANDLE h = CreateFileW(path.c_str(),
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    WriteFile(h, line, (DWORD)ln, &wrote, nullptr);
+    CloseHandle(h);
 }
 
 static std::string HexLowerLocal(const uint8_t* data, size_t n) {

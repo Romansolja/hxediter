@@ -17,6 +17,25 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val);
  * write access when idle. Returns 0 on success, -1 on failure. */
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val);
 
+/* Atomic read-then-write for a single byte at `offset`.
+ *
+ * Returns 0 on success and writes the previous byte value to *out_old_val.
+ * On Windows, holds an exclusive byte-range lock (LockFileEx on a 1-byte
+ * range) for the read+write so no concurrent external writer can change
+ * the byte between the read and the write — closes the TOCTOU window
+ * where the undo stack would otherwise capture a stale "old" value.
+ *
+ * On POSIX, uses a single rb+ FILE* handle so the seek/read/seek/write
+ * sequence runs without an intervening close+reopen, but does not take
+ * an OS-level advisory lock (POSIX flock/fcntl don't compose well with
+ * stdio FILE*; the residual window is sub-microsecond and the design
+ * deliberately supports concurrent external writers).
+ *
+ * Returns -1 if the file cannot be opened, the lock cannot be acquired,
+ * or any I/O step fails. */
+int replace_byte_at_path(const char *path, int64_t offset,
+                         unsigned char new_val, unsigned char *out_old_val);
+
 /* Windows-only; always false elsewhere. */
 bool is_file_held_by_other_process(const char *path);
 

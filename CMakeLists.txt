@@ -29,7 +29,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(glfw)
 
 # ---------------------------------------------------------------------------
-# Dear ImGui — no native CMake support, so we build it as a static library
+# Dear ImGui — no native CMake support upstream, so we build it ourselves.
+# Target is named `hx_imgui` (not `imgui`) to avoid a name collision if a
+# future ImGui release ever ships a top-level CMakeLists that defines its
+# own `imgui` target — FetchContent_MakeAvailable would then auto-include
+# it and our add_library() would fail with a duplicate-target error.
 # ---------------------------------------------------------------------------
 FetchContent_Declare(
     imgui
@@ -38,7 +42,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-add_library(imgui STATIC
+add_library(hx_imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
@@ -47,11 +51,11 @@ add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
-target_include_directories(imgui PUBLIC
+target_include_directories(hx_imgui PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui PUBLIC glfw)
+target_link_libraries(hx_imgui PUBLIC glfw)
 
 # ---------------------------------------------------------------------------
 # nlohmann/json — single-header JSON parser for the GitHub releases API
@@ -136,7 +140,7 @@ target_include_directories(hxediter PRIVATE
 )
 target_link_libraries(hxediter PRIVATE
     hxcore
-    imgui glfw OpenGL::GL
+    hx_imgui glfw OpenGL::GL
     nlohmann_json::nlohmann_json
     winhttp bcrypt ole32 shell32
 )

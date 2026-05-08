@@ -193,9 +193,23 @@ static void DebugLog(const char* fmt, ...) {
     std::vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
 
-    std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
-    if (!out) return;
-    out << ts << " [main]    " << body << "\r\n";
+    /* Atomic-append via single-shot WriteFile under FILE_APPEND_DATA.
+     * See updater.cpp::DebugLog for the rationale — main, updater, and
+     * the helper all share this log file across process boundaries. */
+    char line[1280];
+    int  ln = std::snprintf(line, sizeof(line), "%s [main]    %s\r\n", ts, body);
+    if (ln <= 0) return;
+    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+
+    HANDLE h = CreateFileW(path.c_str(),
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    WriteFile(h, line, (DWORD)ln, &wrote, nullptr);
+    CloseHandle(h);
 }
 
 /* NSIS can't delete a running binary from $INSTDIR, so the helper must run
@@ -443,7 +457,19 @@ int main(int argc, char* argv[]) {
         new platform::WinDropTarget(&ctx.drag_over,
                                     &ctx.pending_paths,
                                     &ctx.pending_directories);
-    RegisterDragDrop(hwnd, drop_target);
+    /* Surface RegisterDragDrop failures: an unchecked HRESULT here would
+     * silently disable drag-and-drop with no diagnostic. The shutdown
+     * path's RevokeDragDrop+Release is balanced regardless of whether
+     * registration took, so we don't need to back-out the new on
+     * failure — the Release below brings the refcount to zero either
+     * way. */
+    HRESULT rdd_hr = RegisterDragDrop(hwnd, drop_target);
+    if (FAILED(rdd_hr)) {
+        std::fprintf(stderr,
+            "[drop] RegisterDragDrop failed (hr=0x%08lx); "
+            "drag-and-drop will not work this session\n",
+            (unsigned long)rdd_hr);
+    }
     /* The start screen's native Open / Folder-picker dialogs are parented
      * to this HWND so they stay modal-attached to the editor window. */
     SetNativeWindowHandle(hwnd);
@@ -475,20 +501,36 @@ int main(int argc, char* argv[]) {
     ui_cfg.OversampleV = 2;
     ImFontConfig mono_cfg = ui_cfg;
 
-    const std::vector<std::string> ui_font_candidates = {
-        "assets/fonts/Roboto-Regular.ttf",
-        "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
-        "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
-        "C:\\Windows\\Fonts\\Roboto-Regular.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf",
-    };
-    const std::vector<std::string> mono_font_candidates = {
-        "assets/fonts/JetBrainsMono-Regular.ttf",
-        "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf",
-        "/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf",
-        "C:\\Windows\\Fonts\\JetBrainsMono-Regular.ttf",
-        "C:\\Windows\\Fonts\\consola.ttf",
-    };
+    /* Resolve the Windows fonts folder via SHGetKnownFolderPath rather
+     * than hardcoding "C:\\Windows\\Fonts\\". Domain-joined / OS-on-D:
+     * machines and Windows-on-ARM systems can have %WINDIR% (and the
+     * fonts dir inside it) on a different drive — the hardcoded path
+     * silently misses there. */
+    std::vector<std::string> ui_font_candidates =   { "assets/fonts/Roboto-Regular.ttf" };
+    std::vector<std::string> mono_font_candidates = { "assets/fonts/JetBrainsMono-Regular.ttf" };
+#ifdef _WIN32
+    {
+        PWSTR fonts_w = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Fonts, 0, nullptr, &fonts_w)) &&
+            fonts_w != nullptr) {
+            int n = WideCharToMultiByte(CP_UTF8, 0, fonts_w, -1,
+                                        nullptr, 0, nullptr, nullptr);
+            if (n > 1) {
+                std::string fonts_dir(static_cast<size_t>(n - 1), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, fonts_w, -1,
+                                    fonts_dir.data(), n, nullptr, nullptr);
+                /* Append both the optionally-installed family (Roboto /
+                 * JetBrains Mono are not OS defaults) and the universally-
+                 * present Arial / Consolas fallbacks. */
+                ui_font_candidates.push_back(fonts_dir + "\\Roboto-Regular.ttf");
+                ui_font_candidates.push_back(fonts_dir + "\\arial.ttf");
+                mono_font_candidates.push_back(fonts_dir + "\\JetBrainsMono-Regular.ttf");
+                mono_font_candidates.push_back(fonts_dir + "\\consola.ttf");
+            }
+        }
+        if (fonts_w) CoTaskMemFree(fonts_w);
+    }
+#endif
 
     ImFont* ui_font = nullptr;
     for (const auto& path : ui_font_candidates) {
@@ -716,8 +758,6 @@ int main(int argc, char* argv[]) {
         RenderHexEditorUI(ctx.state, &ctx.docs, &ctx.active_doc,
                           ctx.load_error.c_str(),
                           &ctx.pending_paths,
-                          &ctx.installer_to_launch,
-                          &ctx.installer_sha256_to_launch,
                           drag_over_state,
                           &ctx.close_indices,
                           &ctx.directory_files,

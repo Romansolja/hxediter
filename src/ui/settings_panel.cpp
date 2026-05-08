@@ -8,6 +8,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 
 #ifndef APP_VERSION
 #  define APP_VERSION "0.0.0"
@@ -17,9 +18,66 @@ namespace ui {
 
 namespace {
 
-void RenderUpdatesSection(GuiState& s,
-                          std::string* out_installer_to_launch,
-                          std::string* out_installer_sha256) {
+/* Animated accordion: a button-toggled section whose body height eases
+ * between 0 and the body's natural height with framerate-independent
+ * exponential smoothing. State (open / current anim phase / measured
+ * natural height) is owned by the caller's statics so each section can
+ * persist independently across frames; the helper just consumes them.
+ *
+ * The body callback is invoked only at fully-open (anim==1) so the
+ * height measurement doesn't see partially-rendered widgets; while
+ * animating, a Dummy of the interpolated height drives the popup's
+ * AlwaysAutoResize. Caller is responsible for any font Push/Pop around
+ * the body (Appearance and Performance pop the surrounding mono font;
+ * Updates renders in mono). */
+void RenderAccordionSection(const char* label,
+                            bool* open,
+                            float* anim,
+                            float* content_h,
+                            const std::function<void()>& body) {
+    const float dt     = ImGui::GetIO().DeltaTime;
+    const float target = *open ? 1.0f : 0.0f;
+    const float rate   = 8.0f;  /* ~200ms feel, framerate-independent */
+    *anim += (target - *anim) * (1.0f - std::pow(0.1f, dt * rate));
+    if (std::fabs(*anim - target) < 0.002f) *anim = target;
+
+    /* Zero ItemSpacing BEFORE the button — ImGui bakes the spacing at
+     * the end of each item using the style active at that moment.
+     * Pushing after the button is too late (the row's bottom margin is
+     * already committed). */
+    const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+    if (ImGui::Button(label, ImVec2(-FLT_MIN, 0))) {
+        *open = !*open;
+    }
+    ImGui::PopStyleVar();
+
+    /* While animating, render only a Dummy of cur_h so the popup's
+     * auto-size sees a smooth interpolation. At anim==1 we render the
+     * real content and capture content_h from the natural height so the
+     * Dummy → content handoff is sub-pixel invisible. */
+    const float cur_h = (*content_h) * (*anim);
+    if (cur_h > 0.5f) {
+        if (*anim >= 1.0f) {
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
+            const float start_y = ImGui::GetCursorPosY();
+            ImGui::Indent(4.0f);
+            body();
+            ImGui::Unindent(4.0f);
+            const float end_y = ImGui::GetCursorPosY();
+            *content_h = end_y - start_y;
+            ImGui::PopStyleVar();
+        } else {
+            ImGui::Dummy(ImVec2(0, cur_h));
+        }
+    }
+
+    ImGui::PopStyleVar(); /* ItemSpacing */
+}
+
+void RenderUpdatesSection(GuiState& s) {
     (void)s;
     auto snap = updater::GetSnapshot();
 
@@ -107,9 +165,15 @@ void RenderUpdatesSection(GuiState& s,
         ImGui::PopStyleColor();
     }
 
-    if (download_done && !snap.installer_path.empty() && out_installer_to_launch) {
-        *out_installer_to_launch = snap.installer_path;
-        if (out_installer_sha256) *out_installer_sha256 = snap.installer_sha256;
+    /* Don't write the installer path through any out-param here. The
+     * main loop polls updater::ConsumeInstallerPath() once per frame
+     * and is the single owner of the launch handoff — duplicating
+     * that write here would mean two paths to the same data and a
+     * frame-ordering accident if they ever diverge. We just close
+     * the popup so the user knows the click took, and let main pick
+     * up the path on the same frame (it polls regardless of popup
+     * visibility). */
+    if (download_done && !snap.installer_path.empty()) {
         ImGui::CloseCurrentPopup();
     }
 }
@@ -165,12 +229,10 @@ void RenderPerformanceSection(GuiState& s) {
 
 } /* anonymous namespace */
 
-void RenderSettingsPopup(GuiState& s,
-                         std::string* out_installer_to_launch,
-                         std::string* out_installer_sha256) {
+void RenderSettingsPopup(GuiState& s) {
     /* Per-frame ring buffer of the Updates animation state, surfaced via a
      * separate log window when the Debug checkbox is on. */
-    struct ScuffMetric {
+    struct AnimMetric {
         int   frame;
         float dt;
         float anim;
@@ -178,9 +240,9 @@ void RenderSettingsPopup(GuiState& s,
         float popup_h;
         char  shape;
     };
-    static ScuffMetric s_metrics[96] = {};
-    static int         s_metrics_head = 0;
-    static bool        s_show_debug   = false;
+    static AnimMetric s_metrics[96] = {};
+    static int        s_metrics_head = 0;
+    static bool       s_show_debug   = false;
 
     if (s_show_debug) {
     /* Size cap + post-Begin position clamp so the window (and its close-X)
@@ -188,7 +250,7 @@ void RenderSettingsPopup(GuiState& s,
     ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowSizeConstraints(ImVec2(240, 160), vp->WorkSize);
     ImGui::SetNextWindowSize(ImVec2(560, 560), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Updates Scuff Debug", &s_show_debug)) {
+    if (ImGui::Begin("Updates Animation Diagnostics", &s_show_debug)) {
         ImVec2 wpos  = ImGui::GetWindowPos();
         ImVec2 wsize = ImGui::GetWindowSize();
         ImVec2 lo    = vp->WorkPos;
@@ -205,7 +267,7 @@ void RenderSettingsPopup(GuiState& s,
         int pos = 0;
         for (int i = 0; i < 96; i++) {
             int idx = (s_metrics_head + i) % 96;
-            const ScuffMetric& m = s_metrics[idx];
+            const AnimMetric& m = s_metrics[idx];
             if (m.frame == 0) continue;
             int n = std::snprintf(s_log_text + pos,
                                   (int)sizeof(s_log_text) - pos,
@@ -266,137 +328,47 @@ void RenderSettingsPopup(GuiState& s,
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
 
-    /* Accordion pattern shared with Performance/Updates below. */
+    /* Three accordions, identical animation/measurement scaffold; the
+     * helper owns the math and renders the body via a callback. Body
+     * font is the caller's call: Appearance and Performance read better
+     * in the UI font, so they pop+push the surrounding mono_font;
+     * Updates stays in mono. */
     {
-        static bool  appearance_open      = false;
-        static float appearance_anim      = 0.0f;
-        static float appearance_content_h = 80.0f;
-
-        const float dt     = ImGui::GetIO().DeltaTime;
-        const float target = appearance_open ? 1.0f : 0.0f;
-        const float rate   = 8.0f;
-        appearance_anim += (target - appearance_anim) * (1.0f - std::pow(0.1f, dt * rate));
-        if (std::fabs(appearance_anim - target) < 0.002f) appearance_anim = target;
-
-        const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-        if (ImGui::Button("Appearance##header", ImVec2(-FLT_MIN, 0))) {
-            appearance_open = !appearance_open;
-        }
-        ImGui::PopStyleVar();
-
-        const float cur_h = appearance_content_h * appearance_anim;
-        if (cur_h > 0.5f) {
-            if (appearance_anim >= 1.0f) {
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
-                const float start_y = ImGui::GetCursorPosY();
-                ImGui::Indent(4.0f);
-                if (s.mono_font) ImGui::PopFont();
-                RenderAppearanceSection(s);
-                if (s.mono_font) ImGui::PushFont(s.mono_font);
-                ImGui::Unindent(4.0f);
-                const float end_y = ImGui::GetCursorPosY();
-                appearance_content_h = end_y - start_y;
-                ImGui::PopStyleVar();
-            } else {
-                ImGui::Dummy(ImVec2(0, cur_h));
-            }
-        }
-
-        ImGui::PopStyleVar(); /* ItemSpacing */
+        static bool  open      = false;
+        static float anim      = 0.0f;
+        static float content_h = 80.0f;
+        RenderAccordionSection("Appearance##header", &open, &anim, &content_h, [&] {
+            if (s.mono_font) ImGui::PopFont();
+            RenderAppearanceSection(s);
+            if (s.mono_font) ImGui::PushFont(s.mono_font);
+        });
     }
 
     ImGui::Spacing();
 
     {
-        static bool  perf_open      = false;
-        static float perf_anim      = 0.0f;
-        static float perf_content_h = 60.0f;
-
-        const float dt     = ImGui::GetIO().DeltaTime;
-        const float target = perf_open ? 1.0f : 0.0f;
-        const float rate   = 8.0f;
-        perf_anim += (target - perf_anim) * (1.0f - std::pow(0.1f, dt * rate));
-        if (std::fabs(perf_anim - target) < 0.002f) perf_anim = target;
-
-        const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-        if (ImGui::Button("Performance##header", ImVec2(-FLT_MIN, 0))) {
-            perf_open = !perf_open;
-        }
-        ImGui::PopStyleVar();
-
-        const float cur_h = perf_content_h * perf_anim;
-        if (cur_h > 0.5f) {
-            if (perf_anim >= 1.0f) {
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
-                const float start_y = ImGui::GetCursorPosY();
-                ImGui::Indent(4.0f);
-                if (s.mono_font) ImGui::PopFont();
-                RenderPerformanceSection(s);
-                if (s.mono_font) ImGui::PushFont(s.mono_font);
-                ImGui::Unindent(4.0f);
-                const float end_y = ImGui::GetCursorPosY();
-                perf_content_h = end_y - start_y;
-                ImGui::PopStyleVar();
-            } else {
-                ImGui::Dummy(ImVec2(0, cur_h));
-            }
-        }
-
-        ImGui::PopStyleVar(); /* ItemSpacing */
+        static bool  open      = false;
+        static float anim      = 0.0f;
+        static float content_h = 60.0f;
+        RenderAccordionSection("Performance##header", &open, &anim, &content_h, [&] {
+            if (s.mono_font) ImGui::PopFont();
+            RenderPerformanceSection(s);
+            if (s.mono_font) ImGui::PushFont(s.mono_font);
+        });
     }
 
     ImGui::Spacing();
 
-    static bool  updates_open = false;
-    static float updates_anim = 0.0f;
-    static float content_h    = 140.0f;
-
-    const float dt     = ImGui::GetIO().DeltaTime;
-    const float target = updates_open ? 1.0f : 0.0f;
-    /* rate=8 → ~200 ms feel, framerate-independent. */
-    const float rate = 8.0f;
-    updates_anim += (target - updates_anim) * (1.0f - std::pow(0.1f, dt * rate));
-    if (std::fabs(updates_anim - target) < 0.002f) updates_anim = target;
-
-    /* Zero ItemSpacing BEFORE the button — ImGui bakes the spacing at the
-     * end of each item using the style active at that moment. Pushing
-     * after the button was too late. */
-    const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-
-    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
-    if (ImGui::Button("Updates##header", ImVec2(-FLT_MIN, 0))) {
-        updates_open = !updates_open;
-    }
-    ImGui::PopStyleVar();
-
-    /* While animating, a plain Dummy of cur_h drives the popup's auto-size;
-     * at anim==1 we render the real content and calibrate content_h from
-     * the measured natural height so the Dummy→content handoff is
-     * sub-pixel invisible. */
-    const float cur_h = content_h * updates_anim;
-    if (cur_h > 0.5f) {
-        if (updates_anim >= 1.0f) {
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
-            const float start_y = ImGui::GetCursorPosY();
-            ImGui::Indent(4.0f);
-            RenderUpdatesSection(s, out_installer_to_launch, out_installer_sha256);
-            ImGui::Unindent(4.0f);
-            const float end_y = ImGui::GetCursorPosY();
-            content_h = end_y - start_y;
-            ImGui::PopStyleVar();
-        } else {
-            ImGui::Dummy(ImVec2(0, cur_h));
-        }
-    }
-
-    ImGui::PopStyleVar(); /* ItemSpacing */
+    /* Updates needs anim/content_h visible to the diagnostics block
+     * below, so the statics live at this scope rather than inside an
+     * inner block like the other two. */
+    static bool  updates_open      = false;
+    static float updates_anim      = 0.0f;
+    static float updates_content_h = 140.0f;
+    RenderAccordionSection("Updates##header",
+                           &updates_open, &updates_anim, &updates_content_h, [&] {
+        RenderUpdatesSection(s);
+    });
 
     ImGui::Spacing();
     ImGui::Checkbox("Debug", &s_show_debug);
@@ -405,11 +377,11 @@ void RenderSettingsPopup(GuiState& s,
     {
         static float s_last_anim = -1.0f;
         if (updates_anim != s_last_anim) {
-            ScuffMetric& m = s_metrics[s_metrics_head];
+            AnimMetric& m = s_metrics[s_metrics_head];
             m.frame   = ImGui::GetFrameCount();
             m.dt      = ImGui::GetIO().DeltaTime;
             m.anim    = updates_anim;
-            m.cur_h   = content_h * updates_anim;
+            m.cur_h   = updates_content_h * updates_anim;
             m.popup_h = ImGui::GetWindowHeight();
             m.shape   = (m.cur_h > 0.5f) ? 'A' : 'B';
             s_metrics_head = (s_metrics_head + 1) % 96;

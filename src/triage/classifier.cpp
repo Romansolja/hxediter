@@ -75,7 +75,13 @@ const char* const kReservedDeviceNames[] = {
 
 bool IsReservedDeviceName(const std::string& name) {
     /* Match the bare name OR <name>.<ext> — Windows treats "CON.txt"
-     * the same as "CON" for the device routing. */
+     * the same as "CON" for the device routing.
+     *
+     * find('.') (first dot), not find_last_of('.') (last dot): the
+     * Windows rule is "the part before the FIRST dot." A folder
+     * named "CON.foo.bar" routes to CON, so the device-name match
+     * must check "CON" — splitting at the last dot would compare
+     * "CON.foo" against the reserved list and miss. */
     std::string base = name;
     auto dot = base.find('.');
     if (dot != std::string::npos) base = base.substr(0, dot);

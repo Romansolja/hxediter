@@ -30,6 +30,13 @@ HexEditorCore::HexEditorCore(const std::string& filename)
         throw std::runtime_error("Cannot open '" + filename + "'");
     }
 
+    /* get_file_size does fseek-to-end / ftell / fseek-to-start on the
+     * long-lived read handle. Search() and ReadAt() both use the same
+     * handle and will fail or return wrong bytes if a concurrent caller
+     * is mid-seek when this runs. All three live on the main UI thread
+     * (the only place that touches state_.fp), so the round-trip here
+     * is fine; flagged so a future move to a worker-pooled read path
+     * doesn't quietly inherit the assumption. */
     state_.file_size = get_file_size(state_.fp);
     if (state_.file_size < 0) {
         fclose(state_.fp);
@@ -73,16 +80,14 @@ std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char 
     if (offset < 0 || offset >= state_.file_size)
         return std::nullopt;
 
-    if (fseek64(state_.fp, offset, SEEK_SET) != 0)
-        return std::nullopt;
-
-    int old_ch = fgetc(state_.fp);
-    if (old_ch == EOF)
-        return std::nullopt;
-
-    unsigned char old_val = static_cast<unsigned char>(old_ch);
-
-    if (write_byte_at_path(state_.filename, offset, new_val) != 0)
+    /* Atomic read+write under one handle, with a one-byte exclusive lock
+     * on Windows so the undo stack always records the byte that was
+     * actually replaced. The previous code read the old byte through the
+     * long-lived read handle and then opened a separate write handle —
+     * a concurrent external writer could mutate the byte between those
+     * two calls, leaving the undo stack with a stale `old_val`. */
+    unsigned char old_val = 0;
+    if (replace_byte_at_path(state_.filename, offset, new_val, &old_val) != 0)
         return std::nullopt;
 
     undo_push(&state_, offset, old_val, new_val);

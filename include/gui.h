@@ -56,12 +56,11 @@ void SetExternalStatus(const std::string& msg, bool is_error);
  * whose body we render this frame (may be updated by the tab bar and
  * returned to the main loop). out_pending_paths receives paths to open
  * (from the Select File button or passthrough); consumed by the main
- * loop like a GLFW drop. out_installer_to_launch receives the path of a
- * verified update installer when the user clicks "Install and restart" in
- * Settings. drag_over_state encodes the OS drag-hover state (0=none,
- * 1=valid, 2=rejected); meaningful on the start screen. out_close_indices
- * is populated with tab indices the user asked to close (via the tab X,
- * middle-click, or Ctrl+W); the main loop erases them.
+ * loop like a GLFW drop. drag_over_state encodes the OS drag-hover
+ * state (0=none, 1=valid, 2=rejected); meaningful on the start screen.
+ * out_close_indices is populated with tab indices the user asked to
+ * close (via the tab X, middle-click, or Ctrl+W); the main loop erases
+ * them.
  *
  * directory_files is the alphabetical list of files in the most-recently
  * loaded folder (empty if no folder loaded). directory_label is the
@@ -74,14 +73,17 @@ void SetExternalStatus(const std::string& msg, bool is_error);
  * one via the start screen's "Triage Folder..." button; main.cpp
  * transitions to AppState::FolderTriage and kicks off triage::StartScan.
  * out_request_triage_back is set true when the triage panel's Back
- * button is clicked; main.cpp transitions back to StartScreen. */
+ * button is clicked; main.cpp transitions back to StartScreen.
+ *
+ * Note: the verified-installer-path handoff used to flow back through
+ * out-params here. It now lives entirely in updater::ConsumeInstallerPath
+ * which the main loop polls — the UI signals "ready" by closing its
+ * popup. */
 void RenderHexEditorUI(AppState state,
                        std::vector<OpenDocument>* docs,
                        int* active_doc,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       std::string* out_installer_to_launch,
-                       std::string* out_installer_sha256,
                        int drag_over_state,
                        std::vector<int>* out_close_indices,
                        const std::vector<std::string>* directory_files,

@@ -173,14 +173,35 @@ void DebugLog(const char* tag, const char* fmt, ...) {
     std::vsnprintf(body, sizeof(body), fmt, ap);
     va_end(ap);
 
-    std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
-    if (!out) return;
-    out << ts << " [" << tag << "] " << body << "\r\n";
+    /* Three processes (parent app, updater_helper, retried prior parent
+     * during an in-flight install) all append to this file. std::ofstream
+     * in append mode does not guarantee atomicity, so two writers can
+     * interleave inside a single line. Use FILE_APPEND_DATA + a single
+     * WriteFile of the fully-formed line: NTFS guarantees atomicity for
+     * an append shorter than the volume's sector size (typically 4 KiB),
+     * which our 1.3 KiB worst case fits inside. Mirrored in main.cpp and
+     * updater_helper/main.cpp. */
+    char line[1280];
+    int  ln = std::snprintf(line, sizeof(line), "%s [%s] %s\r\n", ts, tag, body);
+    if (ln <= 0) return;
+    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+
+    HANDLE h = CreateFileW(path.c_str(),
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD wrote = 0;
+    WriteFile(h, line, (DWORD)ln, &wrote, nullptr);
+    CloseHandle(h);
 }
 
-/* Truncate the debug log on startup if it has grown beyond ~256 KB so
- * users running the updater across many sessions don't accumulate an
- * unbounded log file. */
+/* Rotate the debug log on startup if it has grown beyond ~256 KB.
+ * Renames the current log to "<name>.old" instead of deleting outright
+ * so a user filing a bug report after a failure still has the previous
+ * session's history available. The previous .old (if any) is replaced;
+ * we keep at most one generation. */
 void DebugLogRotateIfNeeded() {
     std::wstring path = DebugLogFile();
     if (path.empty()) return;
@@ -193,7 +214,13 @@ void DebugLogRotateIfNeeded() {
     BOOL got = GetFileSizeEx(h, &sz);
     CloseHandle(h);
     if (got && sz.QuadPart > 256 * 1024) {
-        DeleteFileW(path.c_str());
+        std::wstring old_path = path + L".old";
+        /* Replace any existing .old in one step. MOVEFILE_REPLACE_EXISTING
+         * + MOVEFILE_WRITE_THROUGH guarantees the rename is durable before
+         * we return — a race with the helper opening the log file fresh
+         * sees either the old name or the new, never a half-state. */
+        MoveFileExW(path.c_str(), old_path.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
     }
 }
 
@@ -283,13 +310,48 @@ bool OpenSession(HSession& out) {
                         WINHTTP_NO_PROXY_NAME,
                         WINHTTP_NO_PROXY_BYPASS, 0);
     if (!out.h) return false;
-    /* Default on older Win10 is TLS 1.0; pin to 1.2+. */
+
+    /* Default on older Win10 is TLS 1.0; pin to 1.2+. We *require* this
+     * — letting the session fall back to the system default would make
+     * the SHA256SUMS authenticity dependent on whatever crypto the host
+     * defaults to (TLS 1.0 on legacy hosts is broken). If the option
+     * doesn't take, abort the session rather than silently downgrade. */
     DWORD secure = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 #ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
     secure |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
 #endif
-    WinHttpSetOption(out.h, WINHTTP_OPTION_SECURE_PROTOCOLS,
-                     &secure, sizeof(secure));
+    if (!WinHttpSetOption(out.h, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                          &secure, sizeof(secure))) {
+        DebugLog("updater", "OpenSession: WinHttpSetOption(TLS pin) failed err=%lu",
+                 (unsigned long)GetLastError());
+        WinHttpCloseHandle(out.h);
+        out.h = nullptr;
+        return false;
+    }
+
+    /* Explicit timeouts. The defaults are 0/60s/30s/30s; the resolve=0
+     * means "block forever on DNS" which can strand a worker if the OS
+     * resolver wedges. AbandonRequested() is only checked between
+     * WinHttpReadData calls — without these caps, a hung response can
+     * keep a thread alive past process exit (the detached worker holds
+     * a shared_ptr<UpdaterState>, but the WinHTTP handle is process-
+     * scoped and our exit code path doesn't tear it down).
+     *
+     * Values: resolve 15s (DNS), connect 30s (TCP+TLS), send 30s
+     * (request), receive 30s (per-packet idle on the response stream).
+     * The receive timeout is per-data-block, not total, so a slow but
+     * progressing download isn't penalised. */
+    if (!WinHttpSetTimeouts(out.h,
+                            /*nResolveTimeout=*/15000,
+                            /*nConnectTimeout=*/30000,
+                            /*nSendTimeout=*/   30000,
+                            /*nReceiveTimeout=*/30000)) {
+        DebugLog("updater", "OpenSession: WinHttpSetTimeouts failed err=%lu",
+                 (unsigned long)GetLastError());
+        WinHttpCloseHandle(out.h);
+        out.h = nullptr;
+        return false;
+    }
     return true;
 }
 
@@ -592,10 +654,19 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
             if (name.empty() || url.empty()) continue;
             /* Suffix check, not substring — defends against any future
              * sibling like "HxEditer-X.Y.Z-win64.exe.asc" being picked
-             * over the actual installer. */
+             * over the actual installer.
+             *
+             * First-match-wins: if two assets coincidentally have names
+             * matching HxEditer-*-win64.exe (e.g., a re-uploaded fix),
+             * we deterministically pick the first. Previous behaviour
+             * was last-wins, which made the lookup order-dependent on
+             * GitHub's response and could swap the chosen installer
+             * mid-flight if the API ordering changed. */
             if (name.rfind("HxEditer-", 0) == 0 && ends_with(name, "-win64.exe")) {
-                r.installer_url = url;
-                r.installer_name = name;
+                if (r.installer_url.empty()) {
+                    r.installer_url  = url;
+                    r.installer_name = name;
+                }
             } else if (name == "SHA256SUMS.txt") {
                 r.sums_url = url;
             }

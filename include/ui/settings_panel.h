@@ -9,13 +9,12 @@ namespace ui {
 /* Renders the Settings modal popup. Must be called every frame; the popup
  * itself only draws when OpenPopup("Settings##settings") has fired.
  *
- * out_installer_to_launch / out_installer_sha256: both written non-empty
- * (absolute path + lowercase-hex SHA256) when the user clicks "Install
- * and restart" and the download + integrity check have succeeded. Main
- * loop owns the path and spawns updater-helper.exe; the helper re-checks
- * the SHA256 right before elevation to close the %TEMP% TOCTOU window. */
-void RenderSettingsPopup(GuiState& s,
-                         std::string* out_installer_to_launch,
-                         std::string* out_installer_sha256);
+ * The popup does NOT carry the verified-installer path back through an
+ * out-param — the main loop polls updater::ConsumeInstallerPath() once
+ * per frame regardless of popup visibility, and is the single owner of
+ * the launch handoff. The popup just closes itself when the integrity
+ * check succeeds, so the user's "Install and restart" click feels acted
+ * on; main picks up the path on the same frame. */
+void RenderSettingsPopup(GuiState& s);
 
 } /* namespace ui */

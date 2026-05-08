@@ -85,10 +85,12 @@ std::vector<MoveOp> PlanBucketMoves(
 struct ExecuteOptions {
     /* Whether to write an audit log alongside the moved files. The log
      * destination is NOT user-configurable: it always lands at
-     * <root>/<cfg.junk_subfolder>/triage-log-<ts>.txt, regardless of
+     * <root>/<cfg.junk_subfolder>/triage-log-<ts>.jsonl, regardless of
      * which bucket(s) this batch touched. Rationale: one canonical
      * location keeps the log discoverable across runs, and `_junk` is
-     * where users go first when they want to undo a triage. */
+     * where users go first when they want to undo a triage. Format is
+     * JSON Lines (one record per line, header record first); chosen
+     * over pipe-delimited because POSIX paths can contain '|'. */
     bool write_audit_log = true;
 
     /* Optional cancellation flag. ExecuteMoves polls this between
