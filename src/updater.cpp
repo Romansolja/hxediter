@@ -54,15 +54,23 @@ constexpr int64_t kDebounceSeconds = 6 * 60 * 60;
 constexpr size_t   kMaxJsonBytes      = 4 * 1024 * 1024;
 constexpr uint64_t kMaxInstallerBytes = 200ull * 1024 * 1024;
 
-std::mutex g_mx;
-Snapshot   g_snap;
+/* All mutable updater state lives in this heap-allocated struct, owned
+ * by g_state below. Worker threads (DoCheck, DoDownload) capture a copy
+ * of the shared_ptr by value when they spawn — that copy keeps the
+ * struct alive even after main() returns and the static g_state's own
+ * reference goes away. Without this, an in-flight DoDownload still
+ * inside WinHttpReadData when main exits would lock a destroyed mutex
+ * and write to torn-down statics. The shared_ptr cost is one ref-count
+ * bump per spawn; the lifetime guarantee is worth it. */
+struct UpdaterState {
+    std::mutex          mx;
+    Snapshot            snap;
+    std::atomic<bool>   abandon{false};
+    std::atomic<bool>   check_in_flight{false};
+    std::atomic<bool>   download_in_flight{false};
+};
 
-/* shared_ptr so a worker outliving the main thread still has a valid flag
- * to read. RequestAbandon() flips it; workers check before writes. */
-std::shared_ptr<std::atomic<bool>> g_abandon = std::make_shared<std::atomic<bool>>(false);
-
-std::atomic<bool> g_check_in_flight{false};
-std::atomic<bool> g_download_in_flight{false};
+std::shared_ptr<UpdaterState> g_state = std::make_shared<UpdaterState>();
 
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return L"";
@@ -83,12 +91,12 @@ std::string WideToUtf8(const std::wstring& w) {
 }
 
 template <typename F>
-void WithSnap(F&& f) {
-    std::lock_guard<std::mutex> lk(g_mx);
-    f(g_snap);
+void WithSnap(UpdaterState& st, F&& f) {
+    std::lock_guard<std::mutex> lk(st.mx);
+    f(st.snap);
 }
 
-bool AbandonRequested() { return g_abandon->load(); }
+bool AbandonRequested(UpdaterState& st) { return st.abandon.load(); }
 
 std::optional<std::tuple<int,int,int>> ParseVersion(const std::string& raw) {
     const char* p = raw.c_str();
@@ -315,7 +323,15 @@ bool OpenRequest(HSession& sess, const ParsedUrl& u, HConn& conn, HReq& req) {
                                 flags);
     if (!req.h) return false;
 
-    DWORD redir = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    /* DISALLOW_HTTPS_TO_HTTP is also WinHTTP's default; setting it
+     * explicitly documents the intent and defends against the policy
+     * default ever changing. We rely on TLS for SHA256SUMS authenticity
+     * (the manifest itself is unsigned), so a 30x to plain HTTP would
+     * let a network attacker substitute both the manifest and the
+     * installer in lockstep — the SHA256 check in DoDownload only
+     * defends against a malicious binary if the SHA256SUMS that names
+     * it came over an authenticated channel. */
+    DWORD redir = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
     WinHttpSetOption(req.h, WINHTTP_OPTION_REDIRECT_POLICY, &redir, sizeof(redir));
 
     /* Without these, upstream proxies can serve stale "you're up to date". */
@@ -328,7 +344,10 @@ bool OpenRequest(HSession& sess, const ParsedUrl& u, HConn& conn, HReq& req) {
     return true;
 }
 
-bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& err) {
+bool HttpGetString(UpdaterState& st,
+                   const std::wstring& url,
+                   std::string& out_body,
+                   std::string& err) {
     ParsedUrl u;
     if (!CrackUrl(url, u)) { err = "bad url"; return false; }
     HSession sess;
@@ -371,12 +390,13 @@ bool HttpGetString(const std::wstring& url, std::string& out_body, std::string& 
             err = "ReadData failed"; return false;
         }
         out_body.resize(old + got);
-        if (AbandonRequested()) { err = "abandoned"; return false; }
+        if (AbandonRequested(st)) { err = "abandoned"; return false; }
     }
     return true;
 }
 
-bool HttpDownloadToFile(const std::wstring& url,
+bool HttpDownloadToFile(UpdaterState& st,
+                       const std::wstring& url,
                        const std::wstring& dest_path,
                        std::string& err) {
     ParsedUrl u;
@@ -419,7 +439,7 @@ bool HttpDownloadToFile(const std::wstring& url,
         err = "installer exceeds max allowed size";
         return false;
     }
-    WithSnap([&](Snapshot& s) { s.bytes_total = total; s.bytes_received = 0; });
+    WithSnap(st, [&](Snapshot& s) { s.bytes_total = total; s.bytes_received = 0; });
 
     HANDLE file = CreateFileW(dest_path.c_str(), GENERIC_WRITE, 0, nullptr,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -454,10 +474,10 @@ bool HttpDownloadToFile(const std::wstring& url,
             got_total += got;
             avail     -= got;
             if (got_total - last_tick >= kTickEvery) {
-                WithSnap([&](Snapshot& s) { s.bytes_received = got_total; });
+                WithSnap(st, [&](Snapshot& s) { s.bytes_received = got_total; });
                 last_tick = got_total;
             }
-            if (AbandonRequested()) {
+            if (AbandonRequested(st)) {
                 CloseHandle(file);
                 DeleteFileW(dest_path.c_str());
                 err = "abandoned";
@@ -466,7 +486,7 @@ bool HttpDownloadToFile(const std::wstring& url,
         }
     }
     CloseHandle(file);
-    WithSnap([&](Snapshot& s) {
+    WithSnap(st, [&](Snapshot& s) {
         s.bytes_received = got_total;
         if (s.bytes_total == 0) s.bytes_total = got_total;
     });
@@ -591,15 +611,19 @@ std::optional<ReleaseInfo> ParseRelease(const std::string& body, std::string& er
     }
 }
 
-void DoCheck(bool force) {
+void DoCheck(std::shared_ptr<UpdaterState> state, bool force) {
     (void)force;
+    UpdaterState& st = *state;
     bool expected = false;
-    if (!g_check_in_flight.compare_exchange_strong(expected, true)) return;
-    struct Releaser { ~Releaser() { g_check_in_flight.store(false); } } rel;
+    if (!st.check_in_flight.compare_exchange_strong(expected, true)) return;
+    struct Releaser {
+        UpdaterState& st;
+        ~Releaser() { st.check_in_flight.store(false); }
+    } rel{st};
 
     DebugLog("updater", "DoCheck begin");
 
-    WithSnap([](Snapshot& s) {
+    WithSnap(st, [](Snapshot& s) {
         s.check = CheckState::InProgress;
         s.error_message.clear();
     });
@@ -607,10 +631,10 @@ void DoCheck(bool force) {
     std::string api_url_u8 = std::string("https://api.github.com/repos/")
         + kRepoOwner + "/" + kRepoName + "/releases/latest";
     std::string body; std::string err;
-    if (!HttpGetString(Utf8ToWide(api_url_u8), body, err)) {
+    if (!HttpGetString(st, Utf8ToWide(api_url_u8), body, err)) {
         DebugLog("updater", "DoCheck NetworkError: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.check = CheckState::NetworkError;
             s.error_message = err;
         });
@@ -620,8 +644,8 @@ void DoCheck(bool force) {
     auto rel_info = ParseRelease(body, err);
     if (!rel_info) {
         DebugLog("updater", "DoCheck ParseError: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.check = CheckState::ParseError;
             s.error_message = err;
         });
@@ -633,8 +657,8 @@ void DoCheck(bool force) {
     if (!latest || !ours) {
         DebugLog("updater", "DoCheck ParseError: bad version strings (tag=%s app=%s)",
                  rel_info->tag_name.c_str(), APP_VERSION);
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.check = CheckState::ParseError;
             s.error_message = "could not parse version strings";
         });
@@ -651,33 +675,37 @@ void DoCheck(bool force) {
         latest_str = b;
     }
 
-    if (AbandonRequested()) return;
+    if (AbandonRequested(st)) return;
     if (CompareVersions(*latest, *ours) > 0) {
         DebugLog("updater", "DoCheck UpdateAvailable latest=%s ours=%s",
                  latest_str.c_str(), APP_VERSION);
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.check          = CheckState::UpdateAvailable;
             s.latest_version = latest_str;
         });
     } else {
         DebugLog("updater", "DoCheck UpToDate latest=%s ours=%s",
                  latest_str.c_str(), APP_VERSION);
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.check          = CheckState::UpToDate;
             s.latest_version = latest_str;
         });
     }
 }
 
-void DoDownload() {
+void DoDownload(std::shared_ptr<UpdaterState> state) {
+    UpdaterState& st = *state;
     bool expected = false;
-    if (!g_download_in_flight.compare_exchange_strong(expected, true)) return;
-    struct Releaser { ~Releaser() { g_download_in_flight.store(false); } } rel;
+    if (!st.download_in_flight.compare_exchange_strong(expected, true)) return;
+    struct Releaser {
+        UpdaterState& st;
+        ~Releaser() { st.download_in_flight.store(false); }
+    } rel{st};
 
     DebugLog("updater", "DoDownload begin");
 
     Snapshot snap;
-    WithSnap([&](Snapshot& s) {
+    WithSnap(st, [&](Snapshot& s) {
         s.download = DownloadState::InProgress;
         s.error_message.clear();
         s.launch_error.clear();
@@ -692,10 +720,10 @@ void DoDownload() {
     std::string api_url_u8 = std::string("https://api.github.com/repos/")
         + kRepoOwner + "/" + kRepoName + "/releases/latest";
     std::string body; std::string err;
-    if (!HttpGetString(Utf8ToWide(api_url_u8), body, err)) {
+    if (!HttpGetString(st, Utf8ToWide(api_url_u8), body, err)) {
         DebugLog("updater", "DoDownload re-fetch failed: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Could not re-fetch release: " + err;
         });
@@ -704,8 +732,8 @@ void DoDownload() {
     auto rel_info = ParseRelease(body, err);
     if (!rel_info) {
         DebugLog("updater", "DoDownload ParseRelease failed: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Release parse failed: " + err;
         });
@@ -713,7 +741,7 @@ void DoDownload() {
     }
     if (rel_info->sums_url.empty()) {
         DebugLog("updater", "DoDownload aborted: SHA256SUMS.txt missing from release");
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Release is missing SHA256SUMS.txt — cannot verify download. Ask the maintainer to re-release with integrity manifest.";
         });
@@ -721,10 +749,10 @@ void DoDownload() {
     }
 
     std::string sums_body;
-    if (!HttpGetString(Utf8ToWide(rel_info->sums_url), sums_body, err)) {
+    if (!HttpGetString(st, Utf8ToWide(rel_info->sums_url), sums_body, err)) {
         DebugLog("updater", "DoDownload SHA256SUMS fetch failed: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Could not download SHA256SUMS.txt: " + err;
         });
@@ -734,7 +762,7 @@ void DoDownload() {
     if (!expected_sha) {
         DebugLog("updater", "DoDownload SHA256SUMS lookup miss for %s",
                  rel_info->installer_name.c_str());
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "SHA256SUMS.txt has no entry for " + rel_info->installer_name;
         });
@@ -747,7 +775,7 @@ void DoDownload() {
     if (!ours) {
         DebugLog("updater", "DoDownload unparseable tag: %s",
                  rel_info->tag_name.c_str());
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Unparseable tag: " + rel_info->tag_name;
         });
@@ -759,7 +787,7 @@ void DoDownload() {
     std::wstring dst = TempInstallerPath(vs);
     if (dst.empty()) {
         DebugLog("updater", "DoDownload TempInstallerPath empty (GetTempPath failed)");
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "GetTempPath failed";
         });
@@ -768,22 +796,22 @@ void DoDownload() {
     DebugLog("updater", "DoDownload version=%s dst=\"%s\"",
              vs, WideToUtf8(dst).c_str());
 
-    if (!HttpDownloadToFile(Utf8ToWide(rel_info->installer_url), dst, err)) {
+    if (!HttpDownloadToFile(st, Utf8ToWide(rel_info->installer_url), dst, err)) {
         DebugLog("updater", "DoDownload HttpDownloadToFile failed: %s", err.c_str());
-        if (AbandonRequested()) return;
-        WithSnap([&](Snapshot& s) {
+        if (AbandonRequested(st)) return;
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Download failed: " + err;
         });
         return;
     }
 
-    if (AbandonRequested()) return;
+    if (AbandonRequested(st)) return;
     auto got_sha = ComputeSha256(dst);
     if (!got_sha) {
         DebugLog("updater", "DoDownload ComputeSha256 failed");
         DeleteFileW(dst.c_str());
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "SHA256 compute failed";
         });
@@ -794,7 +822,7 @@ void DoDownload() {
              (*got_sha == *expected_sha) ? 1 : 0);
     if (*got_sha != *expected_sha) {
         DeleteFileW(dst.c_str());
-        WithSnap([&](Snapshot& s) {
+        WithSnap(st, [&](Snapshot& s) {
             s.download = DownloadState::Failed;
             s.error_message = "Integrity check failed — expected "
                 + *expected_sha + ", got " + *got_sha
@@ -805,9 +833,10 @@ void DoDownload() {
 
     DebugLog("updater", "DoDownload Complete installer_path=\"%s\"",
              WideToUtf8(dst).c_str());
-    WithSnap([&](Snapshot& s) {
-        s.download       = DownloadState::Complete;
-        s.installer_path = WideToUtf8(dst);
+    WithSnap(st, [&](Snapshot& s) {
+        s.download         = DownloadState::Complete;
+        s.installer_path   = WideToUtf8(dst);
+        s.installer_sha256 = *got_sha;  /* re-verified by helper */
     });
 }
 
@@ -828,42 +857,52 @@ void InitAndMaybeCheck() {
 }
 
 void StartCheck() {
-    std::thread([]{ DoCheck(/*force=*/true); }).detach();
+    /* Capture the shared_ptr by value so the worker keeps UpdaterState
+     * alive even after main() returns. The static g_state's own
+     * reference can be destroyed during static teardown without taking
+     * the worker's view of the mutex/snapshot with it. */
+    auto state = g_state;
+    std::thread([state]{ DoCheck(state, /*force=*/true); }).detach();
 }
 
 void StartDownload() {
-    std::thread([]{ DoDownload(); }).detach();
+    auto state = g_state;
+    std::thread([state]{ DoDownload(state); }).detach();
 }
 
 Snapshot GetSnapshot() {
-    std::lock_guard<std::mutex> lk(g_mx);
-    return g_snap;
+    UpdaterState& st = *g_state;
+    std::lock_guard<std::mutex> lk(st.mx);
+    return st.snap;
 }
 
 void RequestAbandon() {
-    g_abandon->store(true);
+    g_state->abandon.store(true);
 }
 
 void SetLaunchError(std::string msg) {
     DebugLog("updater", "SetLaunchError: %s", msg.c_str());
-    WithSnap([&](Snapshot& s) {
+    WithSnap(*g_state, [&](Snapshot& s) {
         s.download       = DownloadState::Failed;
         s.launch_error   = std::move(msg);
         s.installer_path.clear();
     });
 }
 
-bool ConsumeInstallerPath(std::string& out_path) {
-    std::lock_guard<std::mutex> lk(g_mx);
-    if (g_snap.download != DownloadState::Complete) return false;
-    if (g_snap.installer_path.empty())               return false;
-    out_path = std::move(g_snap.installer_path);
-    DebugLog("updater", "ConsumeInstallerPath -> \"%s\"", out_path.c_str());
+bool ConsumeInstallerPath(std::string& out_path, std::string& out_sha256) {
+    UpdaterState& st = *g_state;
+    std::lock_guard<std::mutex> lk(st.mx);
+    if (st.snap.download != DownloadState::Complete) return false;
+    if (st.snap.installer_path.empty())               return false;
+    out_path   = std::move(st.snap.installer_path);
+    out_sha256 = std::move(st.snap.installer_sha256);
+    DebugLog("updater", "ConsumeInstallerPath -> \"%s\" sha256=%s",
+             out_path.c_str(), out_sha256.c_str());
     /* Keep check-state so the UI still reflects "new version exists" while
      * the installer runs. */
-    g_snap.download       = DownloadState::Idle;
-    g_snap.bytes_received = 0;
-    g_snap.bytes_total    = 0;
+    st.snap.download       = DownloadState::Idle;
+    st.snap.bytes_received = 0;
+    st.snap.bytes_total    = 0;
     return true;
 }
 

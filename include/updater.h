@@ -30,6 +30,13 @@ struct Snapshot {
     uint64_t      bytes_received = 0;
     uint64_t      bytes_total    = 0;
     std::string   installer_path;
+    /* Lowercase hex SHA256 of installer_path's contents, captured after
+     * the integrity check passed in DoDownload. The helper re-verifies
+     * against this expected hash before ShellExecute("runas") to close
+     * the TOCTOU window between the unprivileged main process's check
+     * and the privileged elevation: %TEMP% is user-writable, so any
+     * other process running as the user could swap the file in between. */
+    std::string   installer_sha256;
 };
 
 /* One-shot at startup: spawns a check thread if the last check is older
@@ -51,10 +58,11 @@ void RequestAbandon();
 /* Surfaces a ShellExecute failure from main.cpp back into the Snapshot. */
 void SetLaunchError(std::string msg);
 
-/* Hands the verified installer path to the caller exactly once.
- * Decouples the handoff from popup visibility so a focus-dismissed
- * Settings popup doesn't strand the download. */
-bool ConsumeInstallerPath(std::string& out_path);
+/* Hands the verified installer path + SHA256 to the caller exactly
+ * once. Decouples the handoff from popup visibility so a focus-dismissed
+ * Settings popup doesn't strand the download. The hash is forwarded to
+ * the elevated helper so it can re-verify before launch. */
+bool ConsumeInstallerPath(std::string& out_path, std::string& out_sha256);
 
 /* Reads and clears updater-helper failure log from the previous run. */
 bool ConsumeLastLaunchFailure(std::string& out_message);

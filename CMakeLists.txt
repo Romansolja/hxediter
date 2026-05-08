@@ -159,7 +159,10 @@ endif()
 # uninstall-before-install step can delete the installed copy freely.
 # ---------------------------------------------------------------------------
 add_executable(hxediter-updater-helper WIN32 tools/updater_helper/main.cpp)
-target_link_libraries(hxediter-updater-helper PRIVATE shell32)
+# bcrypt for the SHA256 TOCTOU recheck performed immediately before
+# ShellExecute("runas") — closes the gap between the parent's verify and
+# the elevated launch when %TEMP% is user-writable.
+target_link_libraries(hxediter-updater-helper PRIVATE shell32 bcrypt)
 if(MINGW)
     target_link_options(hxediter-updater-helper PRIVATE -static -mwindows)
 endif()

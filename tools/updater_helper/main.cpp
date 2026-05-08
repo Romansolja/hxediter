@@ -7,11 +7,20 @@
  * Argv:
  *   [1] absolute path to HxEditer-X.Y.Z-win64.exe inside %TEMP%
  *   [2] parent hxediter PID (decimal)
+ *   [3] expected lowercase-hex SHA256 of the installer (64 chars)
  *
  * The installer path is strictly validated: it must live under %TEMP% and
  * match the HxEditer-*-win64.exe naming. Without this, anything that can
  * spawn the helper could get an arbitrary exe elevated via the "runas"
  * verb below.
+ *
+ * The expected SHA256 is also re-verified against the file's contents
+ * here in the helper, immediately before ShellExecute. The parent
+ * already verified the download — but the parent runs unprivileged and
+ * the file lives in user-writable %TEMP%, so an attacker running as the
+ * user could swap the file between the parent's check and the UAC
+ * prompt, getting arbitrary code elevated under the user's consent.
+ * The recompute eliminates that TOCTOU window.
  *
  * On any failure (UAC declined, NSIS aborted, AV killed the installer),
  * writes a one-shot UTF-8 marker at
@@ -23,7 +32,7 @@
  *
  * Exit codes:
  *   0  installer ran and exited 0
- *   1  bad args / installer path rejected by safety check
+ *   1  bad args / installer path rejected by safety check / SHA mismatch
  *   2  ShellExecute failed to launch (UAC declined, file missing, etc.)
  *   3  installer subprocess exited non-zero (NSIS error, user cancel, AV kill)
  */
@@ -35,13 +44,21 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>
+#include <bcrypt.h>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdint>
+#include <cstring>
 #include <cwchar>
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <shlobj.h>
+
+#ifndef NT_SUCCESS
+#  define NT_SUCCESS(s) (((NTSTATUS)(s)) >= 0)
+#endif
 
 static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
     while (*prefix) {
@@ -107,6 +124,86 @@ static void DebugLog(const char* fmt, ...) {
     out << ts << " [helper]  " << body << "\r\n";
 }
 
+static std::string HexLowerLocal(const uint8_t* data, size_t n) {
+    static const char hex[] = "0123456789abcdef";
+    std::string s(n * 2, '0');
+    for (size_t i = 0; i < n; ++i) {
+        s[2*i]     = hex[data[i] >> 4];
+        s[2*i + 1] = hex[data[i] & 0xF];
+    }
+    return s;
+}
+
+/* Compute SHA256 of `path` as lowercase hex. Empty string on any I/O or
+ * BCrypt failure — caller treats that as "could not verify" and aborts
+ * before ShellExecute. Mirrors updater.cpp::ComputeSha256 but standalone
+ * to keep the helper a single translation unit. */
+static std::string ComputeSha256Local(LPCWSTR path) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    if (!NT_SUCCESS(BCryptOpenAlgorithmProvider(
+            &alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0))) {
+        return std::string();
+    }
+    DWORD hash_len = 0; ULONG rb = 0;
+    if (!NT_SUCCESS(BCryptGetProperty(alg, BCRYPT_HASH_LENGTH,
+                                       (PUCHAR)&hash_len, sizeof(hash_len), &rb, 0))) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return std::string();
+    }
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    if (!NT_SUCCESS(BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0))) {
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return std::string();
+    }
+    /* Open with FILE_SHARE_READ only — explicitly DON'T share write. If
+     * another process has the file open for write right now, this fails
+     * and we abort, which is the right call: a writer mid-stream means
+     * we cannot trust the bytes we're about to elevate. */
+    HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        BCryptDestroyHash(hash);
+        BCryptCloseAlgorithmProvider(alg, 0);
+        return std::string();
+    }
+    std::vector<uint8_t> buf(64 * 1024);
+    bool ok = true;
+    for (;;) {
+        DWORD got = 0;
+        if (!ReadFile(f, buf.data(), (DWORD)buf.size(), &got, nullptr)) { ok = false; break; }
+        if (got == 0) break;
+        if (!NT_SUCCESS(BCryptHashData(hash, buf.data(), got, 0))) { ok = false; break; }
+    }
+    CloseHandle(f);
+    std::string out;
+    if (ok) {
+        std::vector<uint8_t> digest(hash_len);
+        if (NT_SUCCESS(BCryptFinishHash(hash, digest.data(),
+                                        (ULONG)digest.size(), 0))) {
+            out = HexLowerLocal(digest.data(), digest.size());
+        }
+    }
+    BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(alg, 0);
+    return out;
+}
+
+/* Constant-time comparison of two hex strings of equal length. Avoids
+ * the early-exit tell of memcmp on a path that an attacker has any
+ * influence over; cheap insurance for a 64-char compare. */
+static bool ConstantTimeEqual(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    unsigned char acc = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        unsigned char ai = (unsigned char)a[i];
+        unsigned char bi = (unsigned char)b[i];
+        if (ai >= 'A' && ai <= 'Z') ai = (unsigned char)(ai - 'A' + 'a');
+        if (bi >= 'A' && bi <= 'Z') bi = (unsigned char)(bi - 'A' + 'a');
+        acc |= (unsigned char)(ai ^ bi);
+    }
+    return acc == 0;
+}
+
 static bool InstallerPathLooksSafe(LPCWSTR path) {
     if (!path || !*path) return false;
 
@@ -143,15 +240,20 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     DebugLog("WinMain entry argc=%d", argc);
-    if (!argv || argc < 3) {
-        WriteFailureLog("bad args (argc < 3)", argc);
-        DebugLog("exit 1: bad args");
+    /* argv[3] (expected SHA256) became required when the TOCTOU
+     * recheck was added. Older parent binaries that pass only argc==3
+     * are rejected by design — they would otherwise be missing the
+     * integrity guard that closes the elevation race. */
+    if (!argv || argc < 4) {
+        WriteFailureLog("bad args (argc < 4, missing expected sha256)", argc);
+        DebugLog("exit 1: bad args (argc=%d)", argc);
         if (argv) LocalFree(argv);
         return 1;
     }
 
     LPCWSTR installer_path = argv[1];
     DWORD   parent_pid     = (DWORD)_wtoi(argv[2]);
+    LPCWSTR expected_sha_w = argv[3];
 
     /* Convert installer_path to UTF-8 once for diagnostic logging; reused
      * by the safety-check failure marker below. */
@@ -177,6 +279,22 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     }
     DebugLog("InstallerPathLooksSafe -> ok");
 
+    /* Convert expected SHA256 to ASCII once for the post-wait recheck. */
+    std::string expected_sha;
+    expected_sha.reserve(64);
+    for (int i = 0; expected_sha_w[i]; ++i) {
+        wchar_t c = expected_sha_w[i];
+        if (c > 0x7F) { expected_sha.clear(); break; }
+        expected_sha.push_back(static_cast<char>(c));
+    }
+    if (expected_sha.size() != 64) {
+        std::string msg = "expected sha256 is not 64 hex chars";
+        WriteFailureLog(msg.c_str(), (INT_PTR)expected_sha.size());
+        DebugLog("exit 1: %s (got len=%zu)", msg.c_str(), expected_sha.size());
+        LocalFree(argv);
+        return 1;
+    }
+
     if (parent_pid != 0) {
         HANDLE parent = OpenProcess(SYNCHRONIZE, FALSE, parent_pid);
         if (parent) {
@@ -194,6 +312,33 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
      * uninstaller can delete it. AV scanners can hold the image open after
      * the process exits; 1500ms is conservative for typical hosts. */
     Sleep(1500);
+
+    /* TOCTOU close-out: re-hash the file at `installer_path` immediately
+     * before elevation. The parent already verified the download, but
+     * %TEMP% is user-writable, and the safety check + Sleep above gave
+     * a process running as the user a window to swap the file. If the
+     * recompute mismatches the expected SHA256, abort — letting an
+     * unverified payload reach UAC under the legitimate publisher's
+     * displayed metadata is exactly the elevation-of-privilege bug. */
+    std::string got_sha = ComputeSha256Local(installer_path);
+    if (got_sha.empty()) {
+        std::string msg = "could not hash installer (file vanished or locked): "
+                          + installer_utf8;
+        WriteFailureLog(msg.c_str(), 0);
+        DebugLog("exit 1: %s", msg.c_str());
+        LocalFree(argv);
+        return 1;
+    }
+    if (!ConstantTimeEqual(got_sha, expected_sha)) {
+        std::string msg = "installer SHA256 mismatch immediately before launch (TOCTOU?). "
+                          "Expected " + expected_sha + " got " + got_sha;
+        WriteFailureLog(msg.c_str(), 0);
+        DebugLog("exit 1: %s", msg.c_str());
+        DeleteFileW(installer_path);  /* drop the swapped file */
+        LocalFree(argv);
+        return 1;
+    }
+    DebugLog("sha256 recheck ok");
 
     SHELLEXECUTEINFOW sei{};
     sei.cbSize      = sizeof(sei);

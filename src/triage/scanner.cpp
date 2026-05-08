@@ -9,6 +9,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <system_error>
 #include <thread>
@@ -34,35 +35,44 @@ const char* ScanStateName(ScanState s) {
 
 namespace {
 
-/* Global single-instance state.
+/* Single-instance scanner state. One scan at a time per process. The
+ * token mechanism prevents a stale outer thread (slow to die after
+ * RequestCancel) from writing into the progress snapshot after a fresh
+ * StartScan has reset it.
  *
- * One scan at a time per process. The token mechanism prevents a stale
- * outer thread (slow to die after RequestCancel) from writing into
- * g_progress after a fresh StartScan has reset it. Mirrors the
- * abandon-flag pattern in updater.cpp. */
-std::mutex                  g_mx;
-ScanProgress                g_progress;
-std::atomic<bool>           g_cancel{false};
-std::atomic<int>            g_token{0};
-std::condition_variable     g_done_cv;
+ * State lives on the heap, owned by g_state below. Worker threads
+ * capture a copy of the shared_ptr by value when they spawn — that copy
+ * keeps the struct alive even after main() returns. Without this, an
+ * in-flight ScanWorker (mid-walk on a huge tree, or mid-hash on a large
+ * file) would lock a destroyed mutex and signal a destroyed condvar
+ * once main returns. Same fix applied in updater.cpp. */
+struct ScannerState {
+    std::mutex                  mx;
+    ScanProgress                progress;
+    std::atomic<bool>           cancel{false};
+    std::atomic<int>            token{0};
+    std::condition_variable     done_cv;
+};
+
+std::shared_ptr<ScannerState> g_state = std::make_shared<ScannerState>();
 
 template <typename F>
-void WithSnap(F&& f) {
-    std::lock_guard<std::mutex> lk(g_mx);
-    f(g_progress);
+void WithSnap(ScannerState& st, F&& f) {
+    std::lock_guard<std::mutex> lk(st.mx);
+    f(st.progress);
 }
 
-bool IsScanRunningLocked() {
-    return g_progress.state == ScanState::Walking
-        || g_progress.state == ScanState::Classifying
-        || g_progress.state == ScanState::Hashing;
+bool IsScanRunningLocked(ScannerState& st) {
+    return st.progress.state == ScanState::Walking
+        || st.progress.state == ScanState::Classifying
+        || st.progress.state == ScanState::Hashing;
 }
 
-bool IsTerminalLocked() {
-    return g_progress.state == ScanState::Idle
-        || g_progress.state == ScanState::Done
-        || g_progress.state == ScanState::Cancelled
-        || g_progress.state == ScanState::Failed;
+bool IsTerminalLocked(ScannerState& st) {
+    return st.progress.state == ScanState::Idle
+        || st.progress.state == ScanState::Done
+        || st.progress.state == ScanState::Cancelled
+        || st.progress.state == ScanState::Failed;
 }
 
 int ResolveThreadCount(const Config& cfg) {
@@ -164,7 +174,8 @@ bool WalkRoot(const fs::path& root,
 
 /* Phase: classify. Parallel over `walked`; serializes the per-file
  * callback so the consumer doesn't need its own mutex. */
-void ClassifyPhase(const std::vector<WalkedFile>& walked,
+void ClassifyPhase(ScannerState& st,
+                   const std::vector<WalkedFile>& walked,
                    const Config& cfg,
                    std::vector<FileVerdict>& out_verdicts,
                    const FileVerdictCallback& on_classified,
@@ -184,7 +195,7 @@ void ClassifyPhase(const std::vector<WalkedFile>& walked,
                                   - std::chrono::milliseconds(60);
             while (true) {
                 if (cancel.load(std::memory_order_relaxed)) return;
-                if (g_token.load() != my_token) return;
+                if (st.token.load() != my_token) return;
                 const std::size_t i = next_idx.fetch_add(1);
                 if (i >= walked.size()) return;
 
@@ -203,13 +214,13 @@ void ClassifyPhase(const std::vector<WalkedFile>& walked,
                  * 50 ms per worker. */
                 const auto now = std::chrono::steady_clock::now();
                 if (now - last_path_update > std::chrono::milliseconds(50)) {
-                    WithSnap([&](ScanProgress& s) {
+                    WithSnap(st, [&](ScanProgress& s) {
                         s.current_path     = PathToGenericUtf8(walked[i].path);
                         s.files_classified = s.files_classified + 1;
                     });
                     last_path_update = now;
                 } else {
-                    WithSnap([](ScanProgress& s) {
+                    WithSnap(st, [](ScanProgress& s) {
                         s.files_classified = s.files_classified + 1;
                     });
                 }
@@ -229,7 +240,8 @@ void ClassifyPhase(const std::vector<WalkedFile>& walked,
  *      verdict to non-canonical members EXCEPT those already classified
  *      Junk via known-junk basename — basename wins per rule 1.
  */
-void HashPhase(std::vector<FileVerdict>& verdicts,
+void HashPhase(ScannerState& st,
+               std::vector<FileVerdict>& verdicts,
                std::vector<DupGroup>& out_groups,
                const Config& cfg,
                const FileVerdictUpdateCallback& on_dup_updated,
@@ -252,13 +264,18 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
         for (auto i : idxs) candidates.push_back(i);
     }
 
-    WithSnap([&](ScanProgress& s) {
+    WithSnap(st, [&](ScanProgress& s) {
         s.total_to_hash = candidates.size();
     });
 
     if (candidates.empty()) return;
 
-    /* 2. Head-hash all candidates in parallel. */
+    /* 2. Head-hash all candidates in parallel.
+     *
+     * On HashFile failure (vanished file, ACL flipped post-walk, flaky
+     * media), promote the verdict to Error and clear content_hash. The
+     * grouping pass below skips Error verdicts so unreadable files don't
+     * land in a (size, 0) bucket and get nuked into _duplicates/. */
     auto run_hash_pool = [&](const std::vector<std::int32_t>& work,
                              std::uint64_t max_bytes,
                              bool count_progress) {
@@ -270,15 +287,22 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
             pool.emplace_back([&]() {
                 while (true) {
                     if (cancel.load(std::memory_order_relaxed)) return;
-                    if (g_token.load() != my_token) return;
+                    if (st.token.load() != my_token) return;
                     const std::size_t k = next.fetch_add(1);
                     if (k >= work.size()) return;
                     const std::int32_t vi = work[k];
                     fs::path p = PathFromUtf8(verdicts[vi].path);
                     HashResult r = HashFile(p, max_bytes);
-                    if (r.ok) verdicts[vi].content_hash = r.hash;
+                    if (r.ok) {
+                        verdicts[vi].content_hash = r.hash;
+                    } else {
+                        verdicts[vi].content_hash = 0;
+                        verdicts[vi].verdict = Verdict::Error;
+                        verdicts[vi].reason  =
+                            "hash failed (file vanished or unreadable post-walk)";
+                    }
                     if (count_progress) {
-                        WithSnap([](ScanProgress& s) {
+                        WithSnap(st, [](ScanProgress& s) {
                             s.files_hashed = s.files_hashed + 1;
                         });
                     }
@@ -291,9 +315,16 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
     run_hash_pool(candidates, kHashHeadBytes, /*count_progress=*/true);
     if (cancel.load(std::memory_order_relaxed)) return;
 
-    /* 3. Disambiguate large-file head-hash collisions with a full hash. */
+    /* 3. Disambiguate large-file head-hash collisions with a full hash.
+     *
+     * Skip Verdict::Error candidates here — those are files whose hash
+     * failed in step 2. Including them would lump every failed-hash file
+     * into a single (size, 0) bucket and falsely call them duplicates of
+     * each other; rule of thumb in this scanner: never group on a hash
+     * we don't have. */
     std::map<std::pair<std::uint64_t, std::uint64_t>, std::vector<std::int32_t>> head_groups;
     for (auto vi : candidates) {
+        if (verdicts[vi].verdict == Verdict::Error) continue;
         head_groups[{verdicts[vi].size, verdicts[vi].content_hash}].push_back(vi);
     }
     std::vector<std::int32_t> rehash;
@@ -311,7 +342,7 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
          * Without this the user sees "hashed N/N" while the disk
          * grinds for another minute on full-file rehashes of large
          * candidate groups. */
-        WithSnap([&](ScanProgress& s) {
+        WithSnap(st, [&](ScanProgress& s) {
             s.total_to_hash = static_cast<std::uint64_t>(
                 candidates.size() + rehash.size());
         });
@@ -321,6 +352,7 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
         /* Recompute groupings now that large files have full hashes. */
         head_groups.clear();
         for (auto vi : candidates) {
+            if (verdicts[vi].verdict == Verdict::Error) continue;
             head_groups[{verdicts[vi].size, verdicts[vi].content_hash}].push_back(vi);
         }
     }
@@ -371,56 +403,58 @@ void HashPhase(std::vector<FileVerdict>& verdicts,
     }
 }
 
-void ScanWorker(fs::path root,
+void ScanWorker(std::shared_ptr<ScannerState> state,
+                fs::path root,
                 Config cfg,
                 int my_token,
                 FileVerdictCallback on_classified,
                 FileVerdictUpdateCallback on_dup_updated) {
-    auto token_alive = [my_token]() {
-        return g_token.load() == my_token && !g_cancel.load();
+    ScannerState& st = *state;
+    auto token_alive = [&st, my_token]() {
+        return st.token.load() == my_token && !st.cancel.load();
     };
-    auto fail = [my_token](std::string msg) {
-        if (g_token.load() != my_token) return;
-        WithSnap([&](ScanProgress& s) {
+    auto fail = [&st, my_token](std::string msg) {
+        if (st.token.load() != my_token) return;
+        WithSnap(st, [&](ScanProgress& s) {
             s.state         = ScanState::Failed;
             s.error_message = std::move(msg);
         });
-        g_done_cv.notify_all();
+        st.done_cv.notify_all();
     };
-    auto cancel_now = [my_token]() {
-        if (g_token.load() != my_token) return;
-        WithSnap([](ScanProgress& s) { s.state = ScanState::Cancelled; });
-        g_done_cv.notify_all();
+    auto cancel_now = [&st, my_token]() {
+        if (st.token.load() != my_token) return;
+        WithSnap(st, [](ScanProgress& s) { s.state = ScanState::Cancelled; });
+        st.done_cv.notify_all();
     };
-    auto done_now = [my_token]() {
-        if (g_token.load() != my_token) return;
-        WithSnap([](ScanProgress& s) { s.state = ScanState::Done; });
-        g_done_cv.notify_all();
+    auto done_now = [&st, my_token]() {
+        if (st.token.load() != my_token) return;
+        WithSnap(st, [](ScanProgress& s) { s.state = ScanState::Done; });
+        st.done_cv.notify_all();
     };
 
     /* ===== Walk phase ===== */
     std::vector<WalkedFile> walked;
     {
         std::string err;
-        if (!WalkRoot(root, cfg, walked, g_cancel, err)) {
+        if (!WalkRoot(root, cfg, walked, st.cancel, err)) {
             fail(std::move(err));
             return;
         }
     }
     if (!token_alive()) { cancel_now(); return; }
 
-    WithSnap([&](ScanProgress& s) {
+    WithSnap(st, [&](ScanProgress& s) {
         s.files_walked = walked.size();
         s.state        = ScanState::Classifying;
     });
 
     /* ===== Classify phase ===== */
     std::vector<FileVerdict> verdicts;
-    ClassifyPhase(walked, cfg, verdicts, on_classified, g_cancel, my_token);
+    ClassifyPhase(st, walked, cfg, verdicts, on_classified, st.cancel, my_token);
     if (!token_alive()) { cancel_now(); return; }
 
     /* Publish classify-phase results (without dup metadata yet). */
-    WithSnap([&](ScanProgress& s) {
+    WithSnap(st, [&](ScanProgress& s) {
         s.files = verdicts;
         s.state = ScanState::Hashing;
     });
@@ -428,11 +462,11 @@ void ScanWorker(fs::path root,
     /* ===== Hash phase ===== */
     std::vector<DupGroup> dup_groups;
     if (cfg.enable_duplicates) {
-        HashPhase(verdicts, dup_groups, cfg, on_dup_updated, g_cancel, my_token);
+        HashPhase(st, verdicts, dup_groups, cfg, on_dup_updated, st.cancel, my_token);
         if (!token_alive()) { cancel_now(); return; }
     }
 
-    WithSnap([&](ScanProgress& s) {
+    WithSnap(st, [&](ScanProgress& s) {
         s.files      = verdicts;
         s.dup_groups = std::move(dup_groups);
     });
@@ -448,51 +482,59 @@ void StartScan(const fs::path& root,
                FileVerdictUpdateCallback on_dup_updated) {
     ValidateConfig(cfg);  /* throws ConfigError on bad subfolder names */
 
+    auto state = g_state;  /* keep state alive past main() return */
+    ScannerState& st = *state;
+
     int my_token;
     {
-        std::lock_guard<std::mutex> lk(g_mx);
-        if (IsScanRunningLocked()) return;  /* one-at-a-time, silent no-op */
-        g_cancel.store(false);
-        my_token = g_token.fetch_add(1) + 1;
-        g_progress        = ScanProgress{};
-        g_progress.state  = ScanState::Walking;
-        g_progress.root   = root;
-        g_progress.config = cfg;  /* snapshot for panel / auditing */
+        std::lock_guard<std::mutex> lk(st.mx);
+        if (IsScanRunningLocked(st)) return;  /* one-at-a-time, silent no-op */
+        st.cancel.store(false);
+        my_token = st.token.fetch_add(1) + 1;
+        st.progress        = ScanProgress{};
+        st.progress.state  = ScanState::Walking;
+        st.progress.root   = root;
+        st.progress.config = cfg;  /* snapshot for panel / auditing */
     }
 
-    std::thread([root, cfg, my_token,
+    std::thread([state, root, cfg, my_token,
                  cb_cls = std::move(on_classified),
                  cb_dup = std::move(on_dup_updated)]() {
-        ScanWorker(root, cfg, my_token, std::move(cb_cls), std::move(cb_dup));
+        ScanWorker(state, root, cfg, my_token,
+                   std::move(cb_cls), std::move(cb_dup));
     }).detach();
 }
 
 ScanProgress GetProgress() {
-    std::lock_guard<std::mutex> lk(g_mx);
-    return g_progress;  /* copy under lock */
+    ScannerState& st = *g_state;
+    std::lock_guard<std::mutex> lk(st.mx);
+    return st.progress;  /* copy under lock */
 }
 
 void RequestCancel() {
-    g_cancel.store(true);
-    g_done_cv.notify_all();  /* wake any WaitForCompletion early */
+    ScannerState& st = *g_state;
+    st.cancel.store(true);
+    st.done_cv.notify_all();  /* wake any WaitForCompletion early */
 }
 
 void Reset() {
+    ScannerState& st = *g_state;
     /* Increment the token first so any in-flight worker checking
-     * g_token != my_token will treat itself as orphaned and not write
-     * back into g_progress. Then take the lock, reset state, drop. */
-    g_token.fetch_add(1);
-    g_cancel.store(false);
+     * st.token != my_token will treat itself as orphaned and not write
+     * back into st.progress. Then take the lock, reset state, drop. */
+    st.token.fetch_add(1);
+    st.cancel.store(false);
     {
-        std::lock_guard<std::mutex> lk(g_mx);
-        g_progress = ScanProgress{};
+        std::lock_guard<std::mutex> lk(st.mx);
+        st.progress = ScanProgress{};
     }
-    g_done_cv.notify_all();
+    st.done_cv.notify_all();
 }
 
 void WaitForCompletion() {
-    std::unique_lock<std::mutex> lk(g_mx);
-    g_done_cv.wait(lk, []() { return IsTerminalLocked(); });
+    ScannerState& st = *g_state;
+    std::unique_lock<std::mutex> lk(st.mx);
+    st.done_cv.wait(lk, [&st]() { return IsTerminalLocked(st); });
 }
 
 }  /* namespace triage */

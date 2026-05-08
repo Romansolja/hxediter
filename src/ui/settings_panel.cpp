@@ -17,7 +17,9 @@ namespace ui {
 
 namespace {
 
-void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
+void RenderUpdatesSection(GuiState& s,
+                          std::string* out_installer_to_launch,
+                          std::string* out_installer_sha256) {
     (void)s;
     auto snap = updater::GetSnapshot();
 
@@ -107,6 +109,7 @@ void RenderUpdatesSection(GuiState& s, std::string* out_installer_to_launch) {
 
     if (download_done && !snap.installer_path.empty() && out_installer_to_launch) {
         *out_installer_to_launch = snap.installer_path;
+        if (out_installer_sha256) *out_installer_sha256 = snap.installer_sha256;
         ImGui::CloseCurrentPopup();
     }
 }
@@ -162,7 +165,9 @@ void RenderPerformanceSection(GuiState& s) {
 
 } /* anonymous namespace */
 
-void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
+void RenderSettingsPopup(GuiState& s,
+                         std::string* out_installer_to_launch,
+                         std::string* out_installer_sha256) {
     /* Per-frame ring buffer of the Updates animation state, surfaced via a
      * separate log window when the Debug checkbox is on. */
     struct ScuffMetric {
@@ -381,7 +386,7 @@ void RenderSettingsPopup(GuiState& s, std::string* out_installer_to_launch) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, natural_item_spacing);
             const float start_y = ImGui::GetCursorPosY();
             ImGui::Indent(4.0f);
-            RenderUpdatesSection(s, out_installer_to_launch);
+            RenderUpdatesSection(s, out_installer_to_launch, out_installer_sha256);
             ImGui::Unindent(4.0f);
             const float end_y = ImGui::GetCursorPosY();
             content_h = end_y - start_y;

@@ -107,8 +107,12 @@ struct AppContext {
     std::unordered_set<std::string> open_canonical;
     std::string               load_error;
     GLFWwindow*               window = nullptr;
-    /* Set by Settings: absolute path to a SHA-verified installer in %TEMP%. */
+    /* Set by Settings: absolute path to a SHA-verified installer in %TEMP%.
+     * The companion sha256 is forwarded to the elevated helper so it can
+     * re-verify before ShellExecute("runas") — closes the TOCTOU window
+     * between the unprivileged check and the privileged launch. */
     std::string               installer_to_launch;
+    std::string               installer_sha256_to_launch;
 #ifdef _WIN32
     platform::DragState       drag_over = platform::DragState::None;
 #endif
@@ -195,11 +199,22 @@ static void DebugLog(const char* fmt, ...) {
 }
 
 /* NSIS can't delete a running binary from $INSTDIR, so the helper must run
- * from a copy in %TEMP%. */
+ * from a copy in %TEMP%. The expected SHA256 (lowercase hex) is forwarded
+ * so the elevated helper can re-verify the file's contents immediately
+ * before ShellExecute("runas") — without that recheck, a process running
+ * as the user could swap the file in %TEMP% between our check and the
+ * UAC prompt and get arbitrary code elevated under the user's consent. */
 static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
+                                const std::string& installer_sha256_utf8,
                                 std::string& err_utf8) {
-    DebugLog("LaunchUpdaterHelper begin installer=\"%s\"",
-             installer_path_utf8.c_str());
+    DebugLog("LaunchUpdaterHelper begin installer=\"%s\" sha256=%s",
+             installer_path_utf8.c_str(), installer_sha256_utf8.c_str());
+
+    if (installer_sha256_utf8.size() != 64) {
+        err_utf8 = "missing or malformed SHA256 for installer";
+        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
+        return false;
+    }
 
     wchar_t exe_path[MAX_PATH];
     DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
@@ -267,13 +282,22 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
                         (int)installer_path_utf8.size(),
                         winst.data(), wide_n);
 
+    /* SHA256 is plain hex (64 bytes ASCII), so a single-byte widen is
+     * sufficient; no need for MultiByteToWideChar. */
+    std::wstring wsha;
+    wsha.reserve(installer_sha256_utf8.size());
+    for (char c : installer_sha256_utf8) {
+        wsha.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+    }
+
     /* Installer path may contain spaces — quote it.
      * %ls (not %s) for the wide path: on MinGW-MSVCRT, wide swprintf
      * treats %s as char*, so a wchar_t* gets read as bytes and stops at
      * the first NUL — collapsing "C:\Users\..." to "C". */
-    wchar_t args[MAX_PATH + 64];
-    swprintf(args, MAX_PATH + 64, L"\"%ls\" %lu",
-             winst.c_str(), (unsigned long)GetCurrentProcessId());
+    wchar_t args[MAX_PATH + 128];
+    swprintf(args, MAX_PATH + 128, L"\"%ls\" %lu %ls",
+             winst.c_str(), (unsigned long)GetCurrentProcessId(),
+             wsha.c_str());
 
     {
         int wlen = (int)wcslen(args);
@@ -693,6 +717,7 @@ int main(int argc, char* argv[]) {
                           ctx.load_error.c_str(),
                           &ctx.pending_paths,
                           &ctx.installer_to_launch,
+                          &ctx.installer_sha256_to_launch,
                           drag_over_state,
                           &ctx.close_indices,
                           &ctx.directory_files,
@@ -788,12 +813,14 @@ int main(int argc, char* argv[]) {
         /* Non-modal Settings popup can be dismissed mid-download; pull
          * directly so the handoff fires regardless of popup visibility. */
         if (ctx.installer_to_launch.empty()) {
-            updater::ConsumeInstallerPath(ctx.installer_to_launch);
+            updater::ConsumeInstallerPath(ctx.installer_to_launch,
+                                          ctx.installer_sha256_to_launch);
         }
 
         if (!ctx.installer_to_launch.empty()) {
             std::string err;
-            if (LaunchUpdaterHelper(ctx.installer_to_launch, err)) {
+            if (LaunchUpdaterHelper(ctx.installer_to_launch,
+                                    ctx.installer_sha256_to_launch, err)) {
                 DebugLog("LaunchUpdaterHelper ok; closing window");
                 glfwSetWindowShouldClose(window, GLFW_TRUE);
             } else {
@@ -801,6 +828,7 @@ int main(int argc, char* argv[]) {
                 updater::SetLaunchError("Could not start updater: " + err);
             }
             ctx.installer_to_launch.clear();
+            ctx.installer_sha256_to_launch.clear();
         }
 #endif
 
