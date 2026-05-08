@@ -2,8 +2,6 @@
 
 #include "ui/gui_state.h"
 
-#include <string>
-
 namespace ui {
 
 /* Renders the Settings modal popup. Must be called every frame; the popup

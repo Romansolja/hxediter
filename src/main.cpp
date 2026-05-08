@@ -199,7 +199,9 @@ static void DebugLog(const char* fmt, ...) {
     char line[1280];
     int  ln = std::snprintf(line, sizeof(line), "%s [main]    %s\r\n", ts, body);
     if (ln <= 0) return;
-    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+    /* On truncation, snprintf NUL-terminates at sizeof(line)-1; clamp
+     * to that so we never write the trailing NUL byte into the log. */
+    if (ln >= (int)sizeof(line)) ln = (int)sizeof(line) - 1;
 
     HANDLE h = CreateFileW(path.c_str(),
                            FILE_APPEND_DATA,

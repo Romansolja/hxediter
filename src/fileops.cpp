@@ -146,11 +146,22 @@ int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
  * Between steps 2 and 4 a concurrent external writer could mutate the
  * byte, leaving the undo stack with a stale `old_val`. Closing that
  * window required either (a) re-reading inside the write handle or
- * (b) holding a lock across read+write. We do both on Windows: a
- * one-byte exclusive LockFileEx makes the read+write atomic against
- * other processes (including non-hxediter writers), and the
- * read-then-seek-then-write sequence runs under one HANDLE so no
- * close/reopen window remains. */
+ * (b) holding a lock across read+write.
+ *
+ * Windows: we do both. A one-byte exclusive LockFileEx makes the
+ * read+write atomic against other processes (including non-hxediter
+ * writers), and the read-then-seek-then-write sequence runs under one
+ * HANDLE so no close/reopen window remains.
+ *
+ * POSIX: we do only (a) — single FILE* with seek/read/seek/write so
+ * the close-and-reopen window is gone, but we don't take an OS-level
+ * advisory lock. POSIX flock/fcntl don't compose well with stdio FILE*
+ * (they'd require _fileno + the lock-then-buffered-read sequencing
+ * gets ugly), and the residual window between the read and the write
+ * is sub-microsecond. Users on Linux/macOS who hex-edit a file while
+ * an external writer is hammering the same byte have a different
+ * problem; the Windows path is the one that matters in practice
+ * because that's where the editor runs. */
 int replace_byte_at_path(const char *path, int64_t offset,
                          unsigned char new_val, unsigned char *out_old_val)
 {

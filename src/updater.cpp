@@ -184,7 +184,11 @@ void DebugLog(const char* tag, const char* fmt, ...) {
     char line[1280];
     int  ln = std::snprintf(line, sizeof(line), "%s [%s] %s\r\n", ts, tag, body);
     if (ln <= 0) return;
-    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+    /* snprintf returns the would-have-been length; on truncation it has
+     * still NUL-terminated at sizeof(line)-1, so the buffer holds at
+     * most that many valid bytes. Clamp to sizeof(line)-1 (not
+     * sizeof(line)) so we never write the trailing NUL into the log. */
+    if (ln >= (int)sizeof(line)) ln = (int)sizeof(line) - 1;
 
     HANDLE h = CreateFileW(path.c_str(),
                            FILE_APPEND_DATA,

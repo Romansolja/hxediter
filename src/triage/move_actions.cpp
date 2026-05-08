@@ -287,7 +287,12 @@ std::vector<MoveResult> ExecuteMoves(
         fs::path log_dir = root / cfg.junk_subfolder;
         fs::create_directories(log_dir, ec_logdir);
         if (!ec_logdir) {
-            fs::path log_path = log_dir / ("triage-log-" + IsoTimestampLocal() + ".jsonl");
+            /* One timestamp, used for both the filename and the header
+             * record. Computing twice (once per use) could disagree by
+             * a second across the call boundary — a parser correlating
+             * filename to header would see a one-second drift. */
+            const std::string log_ts = IsoTimestampLocal();
+            fs::path log_path = log_dir / ("triage-log-" + log_ts + ".jsonl");
             std::ofstream log(log_path, std::ios::binary);
             if (log) {
                 std::string line;
@@ -298,7 +303,7 @@ std::vector<MoveResult> ExecuteMoves(
                 line += "{\"_format\":";
                 AppendJsonString(line, "triage-audit-jsonl-v1");
                 line += ",\"timestamp\":";
-                AppendJsonString(line, IsoTimestampLocal());
+                AppendJsonString(line, log_ts);
                 line += "}\n";
                 log.write(line.data(), (std::streamsize)line.size());
 

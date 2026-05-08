@@ -128,7 +128,9 @@ static void DebugLog(const char* fmt, ...) {
     char line[1280];
     int  ln = std::snprintf(line, sizeof(line), "%s [helper]  %s\r\n", ts, body);
     if (ln <= 0) return;
-    if (ln > (int)sizeof(line)) ln = (int)sizeof(line);
+    /* On truncation, snprintf NUL-terminates at sizeof(line)-1; clamp
+     * to that so we never write the trailing NUL byte into the log. */
+    if (ln >= (int)sizeof(line)) ln = (int)sizeof(line) - 1;
 
     HANDLE h = CreateFileW(path.c_str(),
                            FILE_APPEND_DATA,
@@ -357,6 +359,18 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     }
     DebugLog("sha256 recheck ok");
 
+    /* Residual TOCTOU note: between ComputeSha256Local closing its
+     * FILE_SHARE_READ handle and ShellExecuteExW reopening the file
+     * by name to launch it, a process running as the user could
+     * still swap %TEMP%\HxEditer-X.Y.Z-win64.exe. The window is
+     * microseconds — bounded by the kernel's inter-syscall latency
+     * — and the swap requires both the timing and the privileges of
+     * a process already running as the same user. Closing it fully
+     * would require something like `LoadLibraryEx + CreateProcess
+     * with the existing handle`, but `runas` (the UAC verb) takes a
+     * path, not a handle. Documenting honestly: this is a narrowed
+     * window, not a closed one. SECURITY.md spells the same thing
+     * out for users. */
     SHELLEXECUTEINFOW sei{};
     sei.cbSize      = sizeof(sei);
     sei.fMask       = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
