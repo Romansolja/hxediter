@@ -309,11 +309,18 @@ static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
     /* Installer path may contain spaces — quote it.
      * %ls (not %s) for the wide path: on MinGW-MSVCRT, wide swprintf
      * treats %s as char*, so a wchar_t* gets read as bytes and stops at
-     * the first NUL — collapsing "C:\Users\..." to "C". */
-    wchar_t args[MAX_PATH + 128];
-    swprintf(args, MAX_PATH + 128, L"\"%ls\" %lu %ls",
+     * the first NUL — collapsing "C:\Users\..." to "C".
+     *
+     * argv[4] is the currently-running exe path, passed as a fallback
+     * hint for the helper's post-install relaunch. The helper prefers
+     * the registry value the NSIS installer writes; this argv only
+     * matters if the registry lookup comes up empty (corrupted hive,
+     * portable / dev build with no install record). Buffer is sized
+     * for two quoted MAX_PATH paths plus PID + 64-char SHA + spaces. */
+    wchar_t args[MAX_PATH * 2 + 512];
+    swprintf(args, MAX_PATH * 2 + 512, L"\"%ls\" %lu %ls \"%ls\"",
              winst.c_str(), (unsigned long)GetCurrentProcessId(),
-             wsha.c_str());
+             wsha.c_str(), exe_path);
 
     {
         int wlen = (int)wcslen(args);

@@ -118,6 +118,26 @@ its trust model is **intentionally narrow**:
   rather than producing a partial-bytes hash.
 * Constant-time SHA256 comparison. Cheap insurance for a 64-char
   compare.
+* **Post-install relaunch.** After the installer exits 0, the helper
+  attempts to reopen the installed editor at medium integrity. The
+  helper itself is unelevated by this point (only the NSIS child was
+  elevated via `runas`), so `ShellExecuteW` from here lands the
+  editor in the user's normal desktop session — no privilege is
+  conferred on the launched process.
+  The relaunch path is resolved from the registry the NSIS installer
+  writes (`Software\Romansolja\HxEditer` default value, with
+  `Uninstall\HxEditer\UninstallString` as a fallback), probed under
+  HKLM and HKCU. The argv[4] hint passed by the parent app is a
+  last-resort recovery fallback only; the running editor's location
+  is not trusted as authoritative.
+  **Observability caveat:** the helper considers the relaunch
+  successful when `ShellExecuteW` returns `> 32`. The shell only
+  confirms it *started* the process — if the freshly-installed
+  editor then crashes during its own startup, that failure is not
+  surfaced via the `last_update_failure.txt` marker (today's
+  no-relaunch behavior would have surfaced it the moment the user
+  clicked the Start-menu icon). A startup-breadcrumb mechanism is
+  tracked as a follow-up.
 
 ### Audit log
 The triage feature writes a per-batch audit log in JSON Lines under

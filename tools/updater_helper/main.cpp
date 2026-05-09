@@ -8,6 +8,12 @@
  *   [1] absolute path to HxEditer-X.Y.Z-win64.exe inside %TEMP%
  *   [2] parent hxediter PID (decimal)
  *   [3] expected lowercase-hex SHA256 of the installer (64 chars)
+ *   [4] (optional) absolute path to the currently-running hxediter.exe,
+ *       used as a fallback for the post-install relaunch when the
+ *       registry lookup that NSIS populates ($INSTDIR under
+ *       Software\Romansolja\HxEditer) is unavailable. Older parent
+ *       binaries that don't pass this still work — the helper prefers
+ *       the registry value anyway.
  *
  * The installer path is strictly validated: it must live under %TEMP% and
  * match the HxEditer-*-win64.exe naming. Without this, anything that can
@@ -26,6 +32,10 @@
  * writes a one-shot UTF-8 marker at
  * %LOCALAPPDATA%\HxEditer\last_update_failure.txt; the main app consumes
  * it on the next startup and surfaces the message in Settings -> Updates.
+ * The same marker is also used when the install succeeds but the
+ * post-install auto-relaunch can't reach a runnable editor (resolution
+ * failures DON'T write a marker — those are diagnose-from-the-log bugs,
+ * not user-actionable conditions; only ShellExecute failures do).
  *
  * Every step also writes a line to %LOCALAPPDATA%\HxEditer\update_debug.log
  * so the next failure is diagnosable from a single file without rebuilding.
@@ -58,6 +68,23 @@
 
 #ifndef NT_SUCCESS
 #  define NT_SUCCESS(s) (((NTSTATUS)(s)) >= 0)
+#endif
+
+/* RegGetValueW view-selector flags. Documented since Windows 8; the
+ * helper targets _WIN32_WINNT 0x0601 (Win 7) for ABI breadth, so define
+ * them here when missing. Values are stable across SDK versions.
+ *
+ * Why both: NSIS itself is a 32-bit installer. On 64-bit Windows its
+ * registry writes land in HKLM\Software\WOW6432Node\... via WoW64
+ * redirection — NOT the native 64-bit view. A 64-bit helper that reads
+ * with WOW6464KEY only will miss everything NSIS just wrote. We probe
+ * the 32-bit view first (today's reality) and fall back to 64-bit so
+ * the code is invariant if NSIS ever ships a 64-bit installer. */
+#ifndef RRF_SUBKEY_WOW6464KEY
+#  define RRF_SUBKEY_WOW6464KEY 0x00010000
+#endif
+#ifndef RRF_SUBKEY_WOW6432KEY
+#  define RRF_SUBKEY_WOW6432KEY 0x00020000
 #endif
 
 static bool StartsWithCI(const wchar_t* s, const wchar_t* prefix) {
@@ -252,6 +279,216 @@ static bool InstallerPathLooksSafe(LPCWSTR path) {
     return true;
 }
 
+/* Strip a trailing '\' from `s`. NSIS doesn't normally write one into
+ * $INSTDIR but the registry contract doesn't promise its absence. */
+static void StripTrailingSlash(std::wstring& s) {
+    while (!s.empty() && (s.back() == L'\\' || s.back() == L'/')) {
+        s.pop_back();
+    }
+}
+
+/* Case-insensitively check whether `s` ends with `suffix`. Used to strip
+ * \Uninstall.exe from the UninstallString registry value — NSIS produces
+ * title-case but a hand-edited registry could be anything. */
+static bool EndsWithCI(const std::wstring& s, const wchar_t* suffix) {
+    size_t sl = wcslen(suffix);
+    if (s.size() < sl) return false;
+    for (size_t i = 0; i < sl; ++i) {
+        wchar_t a = s[s.size() - sl + i];
+        wchar_t b = suffix[i];
+        if (a >= L'A' && a <= L'Z') a = wchar_t(a - L'A' + L'a');
+        if (b >= L'A' && b <= L'Z') b = wchar_t(b - L'A' + L'a');
+        if (a != b) return false;
+    }
+    return true;
+}
+
+/* Single-view read of a REG_SZ value into `out`. Uses RegGetValueW, which
+ * validates the value type and ensures NUL-termination. `view_flag` must
+ * be RRF_SUBKEY_WOW6432KEY or RRF_SUBKEY_WOW6464KEY. Returns true on
+ * success and a non-empty string. */
+static bool ReadRegSZView(HKEY hive, LPCWSTR subkey, LPCWSTR value,
+                          DWORD view_flag, std::wstring& out) {
+    DWORD type = 0;
+    DWORD bytes = 0;
+    LSTATUS s = RegGetValueW(hive, subkey, value,
+                             RRF_RT_REG_SZ | view_flag,
+                             &type, nullptr, &bytes);
+    if (s != ERROR_SUCCESS || bytes == 0 || (bytes % sizeof(wchar_t)) != 0) {
+        return false;
+    }
+    std::wstring buf(bytes / sizeof(wchar_t), L'\0');
+    s = RegGetValueW(hive, subkey, value,
+                     RRF_RT_REG_SZ | view_flag,
+                     nullptr, buf.data(), &bytes);
+    if (s != ERROR_SUCCESS) return false;
+    /* RegGetValueW NUL-terminates; trim trailing NULs from the size-
+     * derived length so we don't carry embedded zeros downstream. */
+    while (!buf.empty() && buf.back() == L'\0') buf.pop_back();
+    if (buf.empty()) return false;
+    out = std::move(buf);
+    return true;
+}
+
+/* Read a REG_SZ value, trying both registry views. WoW6432Node first
+ * because that's where today's 32-bit NSIS installer lands its writes
+ * on 64-bit Windows; native 64-bit second so the code keeps working if
+ * NSIS ever ships a 64-bit installer. The previous single-view read
+ * (WOW6464KEY only) silently failed every probe in production — see the
+ * polyfill comment block above for the full reasoning. */
+static bool ReadRegSZ(HKEY hive, LPCWSTR subkey, LPCWSTR value,
+                      std::wstring& out) {
+    return ReadRegSZView(hive, subkey, value, RRF_SUBKEY_WOW6432KEY, out)
+        || ReadRegSZView(hive, subkey, value, RRF_SUBKEY_WOW6464KEY, out);
+}
+
+/* True if `path` is a regular file (exists, not a directory, not a
+ * reparse point). Used to gate registry-resolved paths before we hand
+ * them to ShellExecuteW. */
+static bool IsRegularFile(LPCWSTR path) {
+    DWORD attrs = GetFileAttributesW(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) return false;
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) return false;
+    if (attrs & FILE_ATTRIBUTE_REPARSE_POINT) return false;
+    return true;
+}
+
+/* Resolve the installed hxediter.exe by reading where the NSIS installer
+ * just wrote $INSTDIR. Probe order:
+ *
+ *   1. HKLM Software\Romansolja\HxEditer (default value) — the explicit
+ *      install-folder write at NSIS project.nsi:664. SHCTX resolves to
+ *      HKLM today (RequestExecutionLevel admin + no SetShellVarContext
+ *      current). If a future installer flips to per-user this is HKCU,
+ *      hence the secondary probe below.
+ *   2. HKCU Software\Romansolja\HxEditer (default value) — same key
+ *      under the user hive. Currently never written; defensive against
+ *      a future per-user installer.
+ *   3. HKLM/HKCU Uninstall\HxEditer\UninstallString — strip enclosing
+ *      quotes, strip trailing \Uninstall.exe (case-insensitively), use
+ *      the parent dir.
+ *   4. The `fallback` hint (argv[4] from the parent app), if it's a
+ *      regular file.
+ *
+ * Returns the empty string when nothing yields a runnable file. */
+static std::wstring ResolveInstalledExe(LPCWSTR fallback) {
+    auto try_dir = [](std::wstring dir) -> std::wstring {
+        StripTrailingSlash(dir);
+        if (dir.empty()) return L"";
+        std::wstring exe = dir + L"\\hxediter.exe";
+        return IsRegularFile(exe.c_str()) ? exe : std::wstring();
+    };
+
+    /* Each successful return logs `relaunch path source=<probe>`. The
+     * argv[4] code path can't be exercised by an in-app update test (the
+     * NSIS installer always rewrites the registry mid-flight, so by the
+     * time we resolve the registry probes succeed and argv[4] is never
+     * consulted). The source tag is the only signal that argv[4] ever
+     * fired in production — keep it concise so log greps stay simple. */
+
+    /* (1) and (2): direct $INSTDIR value under both hives. */
+    std::wstring v;
+    if (ReadRegSZ(HKEY_LOCAL_MACHINE,
+                  L"Software\\Romansolja\\HxEditer", L"", v)) {
+        std::wstring p = try_dir(v);
+        if (!p.empty()) {
+            DebugLog("relaunch path source=hklm-romansolja");
+            return p;
+        }
+    }
+    if (ReadRegSZ(HKEY_CURRENT_USER,
+                  L"Software\\Romansolja\\HxEditer", L"", v)) {
+        std::wstring p = try_dir(v);
+        if (!p.empty()) {
+            DebugLog("relaunch path source=hkcu-romansolja");
+            return p;
+        }
+    }
+
+    /* (3): UninstallString, both hives. Strip enclosing quotes (NSIS
+     * writes `"<INSTDIR>\Uninstall.exe"`), then strip the
+     * \Uninstall.exe tail to get the install dir. */
+    auto strip_uninstall = [](std::wstring s) -> std::wstring {
+        if (s.size() >= 2 && s.front() == L'"' && s.back() == L'"') {
+            s = s.substr(1, s.size() - 2);
+        }
+        if (EndsWithCI(s, L"\\Uninstall.exe")) {
+            s.resize(s.size() - wcslen(L"\\Uninstall.exe"));
+        }
+        return s;
+    };
+    static const wchar_t kUninstSub[] =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\HxEditer";
+    if (ReadRegSZ(HKEY_LOCAL_MACHINE, kUninstSub, L"UninstallString", v)) {
+        std::wstring p = try_dir(strip_uninstall(v));
+        if (!p.empty()) {
+            DebugLog("relaunch path source=hklm-uninstall");
+            return p;
+        }
+    }
+    if (ReadRegSZ(HKEY_CURRENT_USER, kUninstSub, L"UninstallString", v)) {
+        std::wstring p = try_dir(strip_uninstall(v));
+        if (!p.empty()) {
+            DebugLog("relaunch path source=hkcu-uninstall");
+            return p;
+        }
+    }
+
+    /* (4): argv[4] hint as the recovery fallback. */
+    if (fallback && *fallback && IsRegularFile(fallback)) {
+        DebugLog("relaunch path source=argv4-fallback");
+        return std::wstring(fallback);
+    }
+    DebugLog("relaunch path source=none (all probes failed)");
+    return std::wstring();
+}
+
+/* One-shot validator for the resolved relaunch path. Hard-fails ONLY
+ * malformed-input cases (empty, GetFullPathNameW failure, doesn't end
+ * .exe). Existence and AV-quarantine are NOT checked here; those are
+ * recoverable through the ShellExecuteW retry loop and reading them
+ * here would conflate transient with permanent failure. The validator
+ * exists for failure clarity in update_debug.log, not security — the
+ * helper is medium-IL by this point and can't escalate.
+ *
+ * The MAX_PATH buffer is intentional: the default install root
+ * ($PROGRAMFILES64\HxEditer\hxediter.exe) is well under the limit. If
+ * long-path support is ever a goal, widen to a heap buffer with
+ * GetFullPathNameW's two-call sizing pattern; today, a >MAX_PATH
+ * resolved path is likely an attack or a misconfiguration and a
+ * silent reject is the right outcome. */
+static bool RelaunchPathLooksSafe(LPCWSTR path) {
+    if (!path || !*path) return false;
+
+    wchar_t full[MAX_PATH];
+    DWORD n = GetFullPathNameW(path, MAX_PATH, full, nullptr);
+    if (n == 0 || n >= MAX_PATH) return false;
+
+    /* Case-insensitive .exe suffix check. */
+    size_t len = wcslen(full);
+    if (len < 4) return false;
+    const wchar_t* tail = full + (len - 4);
+    if (!((tail[0] == L'.') &&
+          (tail[1] == L'e' || tail[1] == L'E') &&
+          (tail[2] == L'x' || tail[2] == L'X') &&
+          (tail[3] == L'e' || tail[3] == L'E'))) {
+        return false;
+    }
+    return true;
+}
+
+/* Closed list of ShellExecuteW failure codes that warrant a retry.
+ * Returning hInstApp is documented as "an SE_ERR_* value or one of the
+ * Windows error codes" with the boundary at 32 (>32 == success). The
+ * AV-hold case for a freshly-written exe almost always surfaces as 26
+ * (SE_ERR_SHARE); occasionally as 5 (SE_ERR_ACCESSDENIED). Anything
+ * else is permanent — file-not-found, bad-format, no-association — and
+ * retrying just delays the failure. */
+static bool IsTransientShellError(INT_PTR hInstApp) {
+    return hInstApp == SE_ERR_SHARE ||
+           hInstApp == SE_ERR_ACCESSDENIED;
+}
+
 /* WinMain (narrow) so MinGW's default crt0 finds the entry point without
  * -municode. Args are still read from GetCommandLineW, so encoding is
  * Unicode-correct. */
@@ -288,6 +525,28 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     }
     DebugLog("argv[1]=\"%s\" parent_pid=%lu",
              installer_utf8.c_str(), (unsigned long)parent_pid);
+
+    /* argv[4] (optional): fallback hxediter.exe path for the post-install
+     * relaunch. Older parent binaries don't pass it; that's fine — the
+     * helper prefers the registry value NSIS just wrote, and only consults
+     * argv[4] if all registry probes come up empty. Copy into a wstring
+     * up front because argv is LocalFree'd before the success-path
+     * relaunch code runs, so a raw pointer would dangle. */
+    std::wstring relaunch_fallback;
+    if (argc >= 5 && argv[4] && *argv[4]) {
+        relaunch_fallback = argv[4];
+        std::string u8;
+        int rn = WideCharToMultiByte(CP_UTF8, 0, argv[4], -1,
+                                     nullptr, 0, nullptr, nullptr);
+        if (rn > 1) {
+            u8.resize(rn - 1);
+            WideCharToMultiByte(CP_UTF8, 0, argv[4], -1,
+                                u8.data(), rn, nullptr, nullptr);
+        }
+        DebugLog("argv[4]=\"%s\" (relaunch fallback hint)", u8.c_str());
+    } else {
+        DebugLog("argv[4] absent — relaunch will use registry only");
+    }
 
     if (!InstallerPathLooksSafe(installer_path)) {
         std::string msg = "installer path rejected by safety check: " + installer_utf8;
@@ -436,7 +695,90 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         return 3;
     }
 
-    ClearFailureLog();
-    DebugLog("exit 0: success");
+    /* Installer exited 0. Resolve the installed exe and attempt relaunch.
+     * The helper is medium-IL (only the runas child was elevated); a
+     * ShellExecuteW from here puts the editor in the user's desktop session
+     * at the correct integrity level — no inadvertent admin rights. */
+    std::wstring exe = ResolveInstalledExe(
+        relaunch_fallback.empty() ? nullptr : relaunch_fallback.c_str());
+
+    bool relaunch_ok = true;
+    if (exe.empty()) {
+        DebugLog("relaunch skipped: no install path resolved "
+                 "(registry empty and argv[4] fallback unusable)");
+        /* Update succeeded; only auto-relaunch is unavailable. Don't
+         * surface to the user — they can launch from Start menu. */
+    } else if (!RelaunchPathLooksSafe(exe.c_str())) {
+        DebugLog("relaunch skipped: resolved path failed safety check");
+        /* Same: don't write a marker. A path being malformed is a bug to
+         * diagnose from update_debug.log, not a user-actionable error. */
+    } else {
+        /* Derive lpDirectory by stripping the filename — without it the
+         * relaunched editor inherits the helper's CWD (%TEMP%, since the
+         * helper was launched from there), making first file-open
+         * dialogs default to %TEMP%. */
+        std::wstring exe_dir = exe;
+        size_t slash = exe_dir.find_last_of(L'\\');
+        if (slash != std::wstring::npos) exe_dir.resize(slash);
+
+        /* UTF-8 just for the log line. */
+        std::string exe_utf8;
+        int u8 = WideCharToMultiByte(CP_UTF8, 0, exe.c_str(), -1,
+                                      nullptr, 0, nullptr, nullptr);
+        if (u8 > 1) {
+            exe_utf8.resize(u8 - 1);
+            WideCharToMultiByte(CP_UTF8, 0, exe.c_str(), -1,
+                                exe_utf8.data(), u8, nullptr, nullptr);
+        }
+
+        DebugLog("relaunch begin path=\"%s\"", exe_utf8.c_str());
+
+        /* Retry loop on transient ShellExecute failures — sharing
+         * violation / access denied is the AV scan-on-write signature
+         * for a freshly-written exe. Backoff total ≈ 3.85s worst case
+         * (100+250+500+1000+2000 ms). Each backoff is gated on a real
+         * IsTransientShellError code; permanent failures (file-not-
+         * found, bad-format, no-association) bail immediately.
+         *
+         * TODO: single-instance mutex. If the user manually opens
+         * HxEditer via Start menu while we're mid-install, this
+         * relaunch produces a second instance. Today (no relaunch)
+         * the user opens it themselves after — duplicate instances
+         * are a new failure mode introduced here. Track separately. */
+        static const DWORD backoff_ms[] = {100, 250, 500, 1000, 2000};
+        INT_PTR last = 0;
+        bool launched = false;
+        for (size_t i = 0;
+             i < sizeof(backoff_ms) / sizeof(backoff_ms[0]); ++i) {
+            HINSTANCE rh = ShellExecuteW(nullptr, L"open", exe.c_str(),
+                                          nullptr, exe_dir.c_str(),
+                                          SW_SHOWNORMAL);
+            last = (INT_PTR)rh;
+            DebugLog("relaunch attempt=%zu hInstApp=%lld",
+                     i, (long long)last);
+            if (last > 32) { launched = true; break; }
+            if (!IsTransientShellError(last)) break;
+            Sleep(backoff_ms[i]);
+        }
+
+        if (!launched) {
+            char msg[200];
+            std::snprintf(msg, sizeof(msg),
+                "Update installed but auto-relaunch failed (code %lld). "
+                "Open HxEditer from the Start menu.", (long long)last);
+            WriteFailureLog(msg, last);
+            relaunch_ok = false;
+        }
+    }
+
+    /* ClearFailureLog only on relaunch success. The shell returning >32
+     * means it accepted the launch, but if the freshly-installed editor
+     * then crashes during its own startup we have no signal — observability
+     * blind spot acknowledged in SECURITY.md. The exit code remains 0:
+     * the install itself succeeded; relaunch is a UX bonus, not a
+     * correctness gate. */
+    if (relaunch_ok) ClearFailureLog();
+    DebugLog("exit 0: success (relaunch=%s)",
+             exe.empty() ? "skipped" : (relaunch_ok ? "ok" : "failed"));
     return 0;
 }
