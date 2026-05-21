@@ -1,33 +1,81 @@
-# HxEditer v5.1
+# HxEditer — macOS port (beta)
 
-A hex editor for Windows built with Dear ImGui and C++17
+C++17 hex editor (Dear ImGui + GLFW + OpenGL), ported to macOS arm64
+from the Windows-only [`main-cpp`](https://github.com/Romansolja/hxediter/tree/main-cpp)
+branch.
 
-## Features
-
-- Fast hex view with inline byte editing and undo
-- Drag-and-drop file loading
-- Search, goto offset, and keyboard navigation
-- Handles files larger than memory (paged view)
-- Three color palettes (default, deuteranopia, high-contrast)
-- Updater that checks GitHub Releases
+**Status:** v1 beta. Apple Silicon only. Requires macOS 12.0 (Monterey)
+or newer. Ad-hoc signed (Developer ID + notarization deferred).
 
 ## Install
 
-Download the latest `HxEditer-X.Y.Z-win64.exe` from the
-[Releases](https://github.com/Romansolja/hxediter/releases) page and run it.
-The app will notify you automatically when a new version is out.
+1. Grab `HxEditer-X.Y.Z-macos-arm64.dmg` from the
+   [Releases](https://github.com/Romansolja/hxediter/releases) page.
+2. Mount the DMG, drag `hxediter.app` to `/Applications`.
+3. **First launch — Gatekeeper warning.** macOS will refuse to open an
+   ad-hoc signed app on its first launch (Developer ID + notarization
+   is deferred). Path through the warning depends on your macOS version:
 
-Windows only, uses CMake. Build is verified against the MinGW-w64 GCC
-toolchain shipped with JetBrains CLion 2026.1 (gcc 13.1.0 at the time
-of writing, located at `<CLion install>/bin/mingw/bin/`); newer
-versions in the same major series should also work but have not been
-exercised. CMake 3.14 or newer required.
+   - **macOS 15 Sequoia or newer:** double-clicking shows *"hxediter
+     cannot be opened because Apple could not verify…"* with no Open
+     button. Apple removed the right-click bypass in Sequoia. Go to
+     **System Settings → Privacy & Security**, scroll down, click
+     **Open Anyway** next to the hxediter entry, confirm with Touch ID,
+     re-launch.
+   - **macOS 13 Ventura / 14 Sonoma:** same warning dialog, but you can
+     right-click the .app → **Open** → confirm. Faster than the Settings
+     dance.
 
-## Security
+   One-time only. Subsequent launches work normally on any version.
 
-See [SECURITY.md](SECURITY.md) for the threat model, the auto-updater
-trust assumptions, and how to report a vulnerability.
+## What's different from the Windows build
+
+Same core hex editor: paged view for large files, inline byte edit,
+undo, search, goto, multi-tab, drag-drop, three palettes, HiDPI.
+
+**Chords accept either Cmd or Ctrl** on macOS, so muscle memory from
+either platform works:
+
+| Chord | Action |
+|---|---|
+| `Cmd+Z`         | Undo last byte edit |
+| `Cmd+W`         | Close current tab |
+| `Cmd+Tab`       | Next tab (`Shift` to reverse; hold to cycle) |
+| `Cmd+1` .. `Cmd+9` | Jump to tab N |
+| `Cmd+=`         | Zoom in |
+| `Cmd+-`         | Zoom out |
+| `Cmd+0`         | Reset zoom to 100% |
+| `Cmd+scroll`    | Zoom by trackpad / wheel |
+| `Cmd+Shift+P`   | Cycle color palette |
+| `F1`            | Toggle help overlay |
+
+**Not yet wired on macOS in v1:**
+- Auto-updater (the WinHTTP-bound update flow is Windows-only)
+- Folder triage workflow (code stays compiled, button hidden)
+
+## Build
+
+Prereqs: Xcode CLT (`xcode-select --install`) and CMake (`brew install
+cmake`). Then:
+
+```
+./release.sh 5.1.2
+```
+
+Drives build → ad-hoc sign → package → SHA256 in one shot. DMG lands
+in `build/`. The sign-before-package order is load-bearing — see
+comments in `release.sh` if you need to change it.
+
+## Quirks
+
+- **"Open With → hxediter" from Finder doesn't open the file.** GLFW
+  doesn't surface the Apple Event for `kAEOpenDocuments`. Workarounds:
+  drag-drop onto a running app, use the Open dialog, or pass the path
+  as a CLI arg from Terminal.
+
+- **Many UI issues.**
 
 ## License
 
-MIT. See `LICENSE.txt`.
+MIT. See `LICENSE.txt`. Security model documented in
+[SECURITY.md](SECURITY.md).

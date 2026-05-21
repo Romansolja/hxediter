@@ -1,5 +1,7 @@
 # Build output
 build/
+# Catches CLion's cmake-build-debug/ + cmake-build-release/ + any other
+# cmake-build-<name>/ flavor a contributor might generate locally.
 cmake-build-*/
 out/
 CMakeCache.txt
@@ -14,10 +16,22 @@ cmake_install.cmake
 *.dylib
 *.dll
 *.exe
-hxediter
+# Anchored to the repo root so a future source dir or asset named
+# `hxediter` (e.g. src/hxediter/) isn't silently swallowed. Only the
+# in-tree-build binary at ./hxediter is the intended target — actual
+# release builds land in build/ and are already covered above.
+/hxediter
+/hxsort
+/hxediter-updater-helper
 *.exp
 *.pdb
 *.ilk
+# macOS: Mach-O debug symbol bundles (clang emits these next to the exe
+# in some build configurations) and the .dmg release artifact (already
+# covered by build/, kept here defensively in case someone runs cpack
+# elsewhere).
+*.dSYM/
+*.dmg
 
 # IDE / editor
 .idea/
@@ -35,6 +49,32 @@ imgui.ini
 .DS_Store
 Thumbs.db
 Desktop.ini
+# Apple metadata stored as separate ._* files on non-HFS filesystems
+# (USB sticks, network shares) — would otherwise pollute every dir.
+._*
+.AppleDouble
+.LSOverride
+
+# Secrets / signing — never commit credentials or signing material.
+# Especially load-bearing for release.sh's Phase 6 (Developer ID +
+# notarization): *.p12 is the exported Developer ID Application cert
+# including its private key, and *.p8 is the App Store Connect API key
+# consumed by `xcrun notarytool` — either one alone is enough for an
+# attacker to ship a signed, notarized build under your identity.
+*.p12
+*.pfx
+*.p8
+*.pem
+*.key
+*.cer
+*.crt
+*.mobileprovision
+*.provisionprofile
+.env
+.env.*
+.netrc
+id_rsa
+id_ed25519
 
 # Per-release artifacts from the updater release workflow
 SHA256SUMS.txt

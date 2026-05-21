@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>              <string>@MACOSX_BUNDLE_BUNDLE_NAME@</string>
+    <key>CFBundleDisplayName</key>       <string>@MACOSX_BUNDLE_BUNDLE_NAME@</string>
+    <key>CFBundleIdentifier</key>        <string>@MACOSX_BUNDLE_GUI_IDENTIFIER@</string>
+    <key>CFBundleVersion</key>           <string>@MACOSX_BUNDLE_BUNDLE_VERSION@</string>
+    <key>CFBundleShortVersionString</key><string>@MACOSX_BUNDLE_SHORT_VERSION_STRING@</string>
+    <key>CFBundleExecutable</key>        <string>hxediter</string>
+    <!-- CFBundleIconFile deliberately omitted until we ship an .icns;
+         see the MACOSX_BUNDLE_ICON_FILE comment in CMakeLists.txt. -->
+    <key>CFBundlePackageType</key>       <string>APPL</string>
+    <key>CFBundleSignature</key>         <string>????</string>
+    <key>NSPrincipalClass</key>          <string>NSApplication</string>
+    <key>NSHumanReadableCopyright</key>  <string>@MACOSX_BUNDLE_COPYRIGHT@</string>
+    <key>LSMinimumSystemVersion</key>    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>   <true/>
+</dict>
+</plist>

@@ -77,6 +77,7 @@ void RenderAccordionSection(const char* label,
     ImGui::PopStyleVar(); /* ItemSpacing */
 }
 
+#ifdef _WIN32
 void RenderUpdatesSection(GuiState& s) {
     (void)s;
     auto snap = updater::GetSnapshot();
@@ -177,6 +178,7 @@ void RenderUpdatesSection(GuiState& s) {
         ImGui::CloseCurrentPopup();
     }
 }
+#endif /* _WIN32 */
 
 void RenderAppearanceSection(GuiState& s) {
     ImGui::TextDisabled("Theme:");
@@ -230,8 +232,11 @@ void RenderPerformanceSection(GuiState& s) {
 } /* anonymous namespace */
 
 void RenderSettingsPopup(GuiState& s) {
+#ifdef _WIN32
     /* Per-frame ring buffer of the Updates animation state, surfaced via a
-     * separate log window when the Debug checkbox is on. */
+     * separate log window when the Debug checkbox is on. Only the Windows
+     * build has an Updates accordion to instrument, so the entire ring
+     * buffer + diagnostics window is gated out elsewhere. */
     struct AnimMetric {
         int   frame;
         float dt;
@@ -299,6 +304,7 @@ void RenderSettingsPopup(GuiState& s) {
     }
     ImGui::End();
     }  /* if (s_show_debug) */
+#endif /* _WIN32 */
 
     /* Floating tray below the gear. Non-modal so the editor stays
      * interactive; all literals scale with content_scale for HiDPI. */
@@ -357,6 +363,14 @@ void RenderSettingsPopup(GuiState& s) {
         });
     }
 
+#ifdef _WIN32
+    /* The auto-updater is WinHTTP + ShellExecute("runas") and only
+     * compiles on Windows. macOS / Linux ship without auto-update in v1
+     * — hide the entire Updates section and the animation-debug toggle
+     * here so the popup doesn't expose UI for a feature that wouldn't
+     * work. The non-Windows updater_stub provides no-op symbols so
+     * RenderUpdatesSection itself would compile, but rendering a
+     * permanently-idle "Check for updates" button confuses users. */
     ImGui::Spacing();
 
     /* Updates needs anim/content_h visible to the diagnostics block
@@ -388,6 +402,7 @@ void RenderSettingsPopup(GuiState& s) {
             s_last_anim = updates_anim;
         }
     }
+#endif
 
     if (s.mono_font) ImGui::PopFont();
     ImGui::EndPopup();

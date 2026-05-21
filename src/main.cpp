@@ -3,6 +3,7 @@
 #include "app_state.h"
 #include "path_utils.h"
 #include "updater.h"
+#include "platform/asset_path.h"
 
 #include "triage/classifier.h"
 #include "triage/scanner.h"
@@ -489,6 +490,31 @@ int main(int argc, char* argv[]) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+    /* Redirect ImGui's window-layout state file out of cwd. On macOS the
+     * app launches from /Applications with cwd = "/" (read-only), so the
+     * default "imgui.ini" silently fails to save — dock layout / column
+     * widths reset on every launch. Pointing at ~/Library/Application
+     * Support/hxediter/ fixes it. On Windows / Linux AppSupportDir()
+     * returns "" and we leave IniFilename at the ImGui default, preserving
+     * the existing cwd-relative behavior. The std::string is static so
+     * the c_str() pointer ImGui holds outlives every frame. Guarded on
+     * empty() up front so non-Apple builds never allocate the joined
+     * path string at all. */
+    if (!platform::AppSupportDir().empty()) {
+        static const std::string g_imgui_ini_path =
+            platform::AppSupportDir() + "imgui.ini";
+        io.IniFilename = g_imgui_ini_path.c_str();
+    }
+
+#ifdef __APPLE__
+    /* Native-feeling text-input shortcuts in InputText widgets: Cmd+A
+     * select-all, Cmd+C / Cmd+V / Cmd+X copy/paste/cut, Option-arrow word
+     * jump. Also flips ImGuiMod_Shortcut to map to Cmd (KeySuper) — but
+     * we don't rely on that detail; gui.cpp gates on ConfigMacOSXBehaviors
+     * explicitly. Must be set before the first frame. */
+    io.ConfigMacOSXBehaviors = true;
+#endif
+
     ImGui::StyleColorsDark();
 
     /* HiDPI one-time bake. Not reactive to mid-session monitor moves —
@@ -515,8 +541,14 @@ int main(int argc, char* argv[]) {
      * machines and Windows-on-ARM systems can have %WINDIR% (and the
      * fonts dir inside it) on a different drive — the hardcoded path
      * silently misses there. */
-    std::vector<std::string> ui_font_candidates =   { "assets/fonts/Roboto-Regular.ttf" };
-    std::vector<std::string> mono_font_candidates = { "assets/fonts/JetBrainsMono-Regular.ttf" };
+    /* platform::ResourceDir() returns "" on Windows/Linux (relative path
+     * resolves via cwd / POST_BUILD staging) and the bundle's
+     * Resources/ path on macOS (so a .app launched from /Applications can
+     * find its fonts). Prefixing here means the loop below is platform-
+     * agnostic. */
+    const std::string& res_dir = platform::ResourceDir();
+    std::vector<std::string> ui_font_candidates =   { res_dir + "assets/fonts/Roboto-Regular.ttf" };
+    std::vector<std::string> mono_font_candidates = { res_dir + "assets/fonts/JetBrainsMono-Regular.ttf" };
 #ifdef _WIN32
     {
         PWSTR fonts_w = nullptr;
@@ -572,7 +604,7 @@ int main(int argc, char* argv[]) {
     icon_cfg.OversampleV = 2;
     icon_cfg.PixelSnapH  = true;
     ImFont* icon_font = TryLoadFont(io,
-        "assets/fonts/fa-solid-900.ttf", 96.0f * content_scale, &icon_cfg, fa_ranges);
+        res_dir + "assets/fonts/fa-solid-900.ttf", 96.0f * content_scale, &icon_cfg, fa_ranges);
 
     /* Separate small-size FA atlas for toolbar icons — each glyph renders
      * at its native size without per-button font scaling. */
@@ -587,7 +619,7 @@ int main(int argc, char* argv[]) {
     icon_small_cfg.OversampleV = 2;
     icon_small_cfg.PixelSnapH  = true;
     ImFont* icon_font_small = TryLoadFont(io,
-        "assets/fonts/fa-solid-900.ttf", 18.0f * content_scale, &icon_small_cfg, fa_small_ranges);
+        res_dir + "assets/fonts/fa-solid-900.ttf", 18.0f * content_scale, &icon_small_cfg, fa_small_ranges);
 
     if (!ui_font)    ui_font = io.Fonts->AddFontDefault();
     if (!mono_font)  mono_font = ui_font;
@@ -597,7 +629,16 @@ int main(int argc, char* argv[]) {
     SetEditorFonts(ui_font, mono_font, title_font, icon_font, icon_font_small);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
+    /* macOS Core Profile (which is what FORWARD_COMPAT above selects)
+     * rejects GLSL #version 130 — Apple supports 3.2+ only, mapping to
+     * GLSL 150. Windows / Linux drivers accept 130 against the 3.3 Core
+     * context, so we keep that there to avoid retesting all rasterized
+     * primitives at a higher version. */
+#ifdef __APPLE__
+    ImGui_ImplOpenGL3_Init("#version 150");
+#else
     ImGui_ImplOpenGL3_Init("#version 130");
+#endif
 
 #ifdef _WIN32
     {

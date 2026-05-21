@@ -8,6 +8,7 @@
 #include "ui/hex_grid.h"
 #include "ui/layout.h"
 #include "ui/settings_panel.h"
+#include "ui/shortcuts.h"
 #include "ui/start_screen.h"
 #include "ui/status_bar.h"
 #include "ui/theme.h"
@@ -67,23 +68,27 @@ void HandleTabShortcuts(std::vector<OpenDocument>& docs,
     const int n = (int)docs.size();
     if (n <= 0) return;
 
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Tab)) {
+    /* Policy lives in ui::ShortcutHeld — see include/ui/shortcuts.h.
+     * IsKeyPressed defaults to repeat=true so Cmd-hold-Tab still cycles. */
+    const bool shortcut = ui::ShortcutHeld(io);
+
+    if (shortcut && ImGui::IsKeyPressed(ImGuiKey_Tab)) {
         int cur = (*active_doc >= 0 && *active_doc < n) ? *active_doc : 0;
         *active_doc = io.KeyShift ? ((cur - 1 + n) % n)
                                   : ((cur + 1) % n);
     }
 
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W)) {
+    if (shortcut && ImGui::IsKeyPressed(ImGuiKey_W)) {
         int cur = *active_doc;
         if (cur >= 0 && cur < n && out_close_indices) {
             out_close_indices->push_back(cur);
         }
     }
 
-    /* Ctrl+1..9 — jump to tab N (1-indexed). */
+    /* Cmd/Ctrl+1..9 — jump to tab N (1-indexed). */
     for (int i = 0; i < 9; ++i) {
         ImGuiKey k = (ImGuiKey)((int)ImGuiKey_1 + i);
-        if (io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(k)) {
+        if (shortcut && !io.KeyShift && ImGui::IsKeyPressed(k)) {
             if (i < n) *active_doc = i;
         }
     }
@@ -105,9 +110,10 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
         s.show_help = false;
     }
 
-    /* Ctrl+wheel zoom runs before the WantTextInput gate — a mouse
+    /* Cmd/Ctrl+wheel zoom runs before the WantTextInput gate — a mouse
      * gesture shouldn't be swallowed just because a field has focus. */
-    if (io.KeyCtrl && io.MouseWheel != 0.0f) {
+    const bool shortcut = ui::ShortcutHeld(io);
+    if (shortcut && io.MouseWheel != 0.0f) {
         AdjustFontScale(s, (io.MouseWheel > 0.0f ? +1.0f : -1.0f)
                               * ui::layout::kFontScaleStep);
         io.MouseWheel = 0.0f;
@@ -115,7 +121,9 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
 
     if (io.WantTextInput) return;
 
-    const bool ctrl  = io.KeyCtrl;
+    /* Re-bind locally so the chord-checks below read uniformly. `shortcut`
+     * already reflects ConfigMacOSXBehaviors; reuse it. */
+    const bool ctrl  = shortcut;
     const bool shift = io.KeyShift;
 
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) ui::DoUndo(s, doc, core);

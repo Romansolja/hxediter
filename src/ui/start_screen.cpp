@@ -41,10 +41,15 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     const char* drop_str    = "Drag and drop a file or folder here";
     const char* button_str  = "Select File";
     const char* button_folder_str = "Open Folder...";
+#ifdef _WIN32
     const char* button2_str = "Triage Folder...";
+#endif
     const float gap_between_buttons = 12.0f;
 
-    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button_folder_label_sz, button2_label_sz;
+    ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button_folder_label_sz;
+#ifdef _WIN32
+    ImVec2 button2_label_sz;
+#endif
 
     if (s.title_font) ImGui::PushFont(s.title_font);
     title_sz = ImGui::CalcTextSize(title_str);
@@ -62,15 +67,22 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     drop_sz                 = ImGui::CalcTextSize(drop_str);
     button_label_sz         = ImGui::CalcTextSize(button_str);
     button_folder_label_sz  = ImGui::CalcTextSize(button_folder_str);
+#ifdef _WIN32
     button2_label_sz        = ImGui::CalcTextSize(button2_str);
+#endif
     if (s.ui_font) ImGui::PopFont();
 
     ImGuiStyle& style = ImGui::GetStyle();
-    /* All three buttons share the widest label width so they line up
-     * vertically. Heights are equal because text height is identical. */
+    /* Visible buttons share the widest label width so they line up
+     * vertically. Heights are equal because text height is identical.
+     * The Triage button (button2) only renders on Windows — including
+     * its width on macOS would size the two visible buttons for the
+     * widest of three labels and add ~12 px of unnecessary slack. */
     float button_label_w = button_label_sz.x;
     if (button_folder_label_sz.x > button_label_w) button_label_w = button_folder_label_sz.x;
+#ifdef _WIN32
     if (button2_label_sz.x       > button_label_w) button_label_w = button2_label_sz.x;
+#endif
     ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f,
                      button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f);
 
@@ -84,7 +96,10 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                 + drop_sz.y  + gap_drop_to_button
                 + button_sz.y
                 + gap_between_buttons + button_sz.y
-                + gap_between_buttons + button_sz.y;
+#ifdef _WIN32
+                + gap_between_buttons + button_sz.y
+#endif
+                ;
     if (load_error && *load_error)
         col_h += gap_button_to_err + ImGui::GetTextLineHeight();
 
@@ -152,6 +167,12 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         }
     }
 
+#ifdef _WIN32
+    /* Triage panel is Windows-only in v1 — the move-actions / scanner code
+     * is cross-platform but the workflow hasn't been validated on macOS
+     * yet. Hide the entry point on non-Windows so a user can't reach a
+     * code path we haven't tested. The pure-logic triage modules stay
+     * compiled so re-enabling later is a one-line gate flip. */
     y += button_sz.y + gap_between_buttons;
     /* Third button: "Triage Folder..." opens the OS-native folder picker. */
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
@@ -162,6 +183,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                 out_pending_triage_root->push_back(std::move(*picked));
         }
     }
+#endif
 
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(3);

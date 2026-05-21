@@ -1,12 +1,52 @@
 #include "hex_editor_core.h"
 #include "fileops.h"
+#include "path_utils.h"
 #include "undo.h"
+
+#include <filesystem>
 #include <stdexcept>
+#include <system_error>
 
 HexEditorCore::HexEditorCore(const std::string& filename)
     : state_{}, filename_storage_(filename)
 {
     state_.filename = filename_storage_.c_str();
+
+    /* Reject directories up front. On macOS, fopen() on a directory
+     * succeeds silently — fread returns 0 and ftell may report 0 or
+     * the block size, so a directory looks like a 0-byte file and the
+     * hex grid renders just an offset column. This bit users who picked
+     * Calculator.app from the Open dialog (before we set
+     * treatsFilePackagesAsDirectories) and also covers drag-drop of a
+     * folder onto an existing tab and CLI args pointing at a directory.
+     * Use std::filesystem rather than stat() so the path-encoding
+     * round-trip matches what the rest of the codebase uses. */
+    {
+        std::error_code ec;
+        auto fsp    = PathFromUtf8(filename);
+        auto status = std::filesystem::status(fsp, ec);
+        if (!ec && std::filesystem::is_directory(status)) {
+            /* Tailor the hint: for macOS bundle suffixes the actionable
+             * advice is "open the package and pick a file inside";
+             * for plain folders that's confusing and the right advice
+             * is just "this is a folder, pick a file". Match by file
+             * extension rather than HFS bundle bit so the hint works
+             * on every platform (Win/Linux drag-drop of a .app
+             * symlink, etc.). */
+            const std::string ext = fsp.extension().string();
+            const bool is_bundle = (ext == ".app"       ||
+                                    ext == ".framework" ||
+                                    ext == ".bundle"    ||
+                                    ext == ".kext");
+            std::string msg = "'" + filename + "' is a directory, not a file.";
+            if (is_bundle) {
+                msg += " On macOS, open the package (right-click → "
+                       "Show Package Contents in Finder) and pick a "
+                       "file inside.";
+            }
+            throw std::runtime_error(msg);
+        }
+    }
 
     if (is_file_held_by_other_process(state_.filename)) {
         throw std::runtime_error(
@@ -28,6 +68,34 @@ HexEditorCore::HexEditorCore(const std::string& filename)
     state_.fp = open_file_shared(state_.filename, "rb");
     if (state_.fp == nullptr) {
         throw std::runtime_error("Cannot open '" + filename + "'");
+    }
+
+    /* Disable stdio buffering on the read handle. Without this, EditByte
+     * (which writes through a *separate* FILE* — see replace_byte_at_path
+     * in fileops.cpp) updates the on-disk byte, but our long-lived stdio
+     * buffer can serve stale data on the next ReadAt: macOS libc keeps
+     * the read buffer valid across fseek when the new position lands
+     * within the previously-buffered region (POSIX leaves this
+     * implementation-defined), so the hex grid renders the pre-edit
+     * value forever even though the file on disk is correct and the
+     * status bar reports a successful edit. Windows stdio happens to
+     * invalidate aggressively enough that the bug doesn't manifest
+     * there, but enabling _IONBF unconditionally costs nothing —
+     * ReadAt reads at most a few hundred bytes per frame and Search
+     * reads in 4 KB chunks (larger than BUFSIZ), so the buffered
+     * version was already doing one read() syscall per call.
+     *
+     * Check the return: setvbuf can fail (rare, but possible if some
+     * libc impl flagged the FILE* as buffering-locked between fopen
+     * and here). A silent fallback to default buffering would resurrect
+     * the macOS staleness bug; surface it instead. */
+    if (setvbuf(state_.fp, nullptr, _IONBF, 0) != 0) {
+        fclose(state_.fp);
+        state_.fp = nullptr;
+        throw std::runtime_error(
+            "Cannot disable buffering on '" + filename + "' (setvbuf failed); "
+            "refusing to open with default buffering on macOS — would render "
+            "stale bytes after edits.");
     }
 
     /* get_file_size does fseek-to-end / ftell / fseek-to-start on the
