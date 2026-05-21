@@ -14,7 +14,13 @@ cmake_install.cmake
 *.dylib
 *.dll
 *.exe
-hxediter
+# Anchored to the repo root so a future source dir or asset named
+# `hxediter` (e.g. src/hxediter/) isn't silently swallowed. Only the
+# in-tree-build binaries are the intended target — actual release
+# builds land in build/ and are already covered above.
+/hxediter
+/hxsort
+/hxediter-updater-helper
 *.exp
 *.pdb
 *.ilk
@@ -35,6 +41,31 @@ imgui.ini
 .DS_Store
 Thumbs.db
 Desktop.ini
+# Apple metadata that Finder writes as separate ._* files on non-HFS
+# filesystems (USB sticks, network shares, this repo when checked out
+# on a Mac) — defensive even on a Windows-targeted branch.
+._*
+.AppleDouble
+.LSOverride
+
+# Secrets / signing — never commit credentials or signing material.
+# Highest-risk on Windows is *.pfx: signtool's PKCS#12 archive holds
+# the Authenticode private key, so one stray *.pfx in the working tree
+# is enough for an attacker to sign binaries as you. *.p12 / *.p8 are
+# the cross-platform / Apple-notarization equivalents, listed here in
+# case anyone cross-builds the macOS port from this branch.
+*.pfx
+*.p12
+*.p8
+*.pem
+*.key
+*.cer
+*.crt
+.env
+.env.*
+.netrc
+id_rsa
+id_ed25519
 
 # Per-release artifacts from the updater release workflow
 SHA256SUMS.txt
