@@ -1,7 +1,7 @@
-# HxEditer — macOS port (beta)
+# HxEditer — macOS (beta)
 
-C++17 hex editor (Dear ImGui + GLFW + OpenGL), ported to macOS arm64
-from the Windows-only [`main-cpp`](https://github.com/Romansolja/hxediter/tree/main-cpp)
+C++17 hex editor (Dear ImGui + GLFW + OpenGL) for macOS arm64. Earlier
+Windows builds live on the [`main-cpp`](https://github.com/Romansolja/hxediter/tree/main-cpp)
 branch.
 
 **Status:** v1 beta. Apple Silicon only. Requires macOS 12.0 (Monterey)
@@ -50,8 +50,8 @@ either platform works:
 | `F1`            | Toggle help overlay |
 
 **Not yet wired on macOS in v1:**
-- Auto-updater (the WinHTTP-bound update flow is Windows-only)
-- Folder triage workflow (code stays compiled, button hidden)
+- Auto-updater — re-download the DMG to update.
+- Folder triage workflow (code stays compiled, button hidden).
 
 ## Build
 

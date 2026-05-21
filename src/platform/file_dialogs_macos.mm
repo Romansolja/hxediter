@@ -4,11 +4,7 @@
  * Thread-safety: NSOpenPanel must run on the main thread. GLFW's macOS
  * event loop is on the process main thread (= AppKit main thread), so
  * the ImGui button callbacks that invoke these functions are already on
- * the right thread — no GCD dispatch needed.
- *
- * The `parent_native_handle` argument is unused on macOS. NSOpenPanel
- * runs its own modal session via [panel runModal] and doesn't require
- * a parent window handle. */
+ * the right thread — no GCD dispatch needed. */
 
 #ifdef __APPLE__
 
@@ -66,14 +62,12 @@ std::optional<std::string> RunPanel(const char* title,
 
 } /* anonymous namespace */
 
-std::optional<std::string> OpenFileDialog(void* /*parent_native_handle*/,
-                                          const char* title) {
+std::optional<std::string> OpenFileDialog(const char* title) {
     return RunPanel(title, /*can_choose_files=*/true,
                            /*can_choose_directories=*/false);
 }
 
-std::optional<std::string> PickFolderDialog(void* /*parent_native_handle*/,
-                                            const char* title) {
+std::optional<std::string> PickFolderDialog(const char* title) {
     return RunPanel(title, /*can_choose_files=*/false,
                            /*can_choose_directories=*/true);
 }

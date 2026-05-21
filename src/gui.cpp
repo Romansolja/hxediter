@@ -13,7 +13,6 @@
 #include "ui/status_bar.h"
 #include "ui/theme.h"
 #include "ui/toolbar.h"
-#include "ui/triage_panel.h"
 
 #include "IconsFontAwesome6.h"
 #include "imgui.h"
@@ -479,10 +478,6 @@ void SetContentScale(float scale) {
     g_state.content_scale = (scale < 1.0f) ? 1.0f : scale;
 }
 
-void SetNativeWindowHandle(void* handle) {
-    g_state.native_window_handle = handle;
-}
-
 bool ReadonlyDefault() {
     return g_state.readonly_default;
 }
@@ -506,9 +501,7 @@ void RenderHexEditorUI(AppState state,
                        const std::vector<std::string>* directory_files,
                        const std::string* directory_label,
                        bool* out_clear_directory,
-                       std::vector<std::string>* out_pending_directories,
-                       std::vector<std::string>* out_pending_triage_root,
-                       bool* out_request_triage_back) {
+                       std::vector<std::string>* out_pending_directories) {
     auto& s = g_state;
 
     /* Only the hex grid scales; toolbar/settings/status stay at 100%.
@@ -542,15 +535,7 @@ void RenderHexEditorUI(AppState state,
 
     if (state == AppState::StartScreen) {
         ui::RenderStartScreen(s, pal, load_error, out_pending_paths,
-                              drag_over_state, out_pending_directories,
-                              out_pending_triage_root);
-        ui::theme::PopEditorStyle();
-        ImGui::End();
-        return;
-    }
-
-    if (state == AppState::FolderTriage) {
-        ui::RenderTriagePanel(s, out_request_triage_back);
+                              drag_over_state, out_pending_directories);
         ui::theme::PopEditorStyle();
         ImGui::End();
         return;

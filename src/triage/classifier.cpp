@@ -60,11 +60,11 @@ bool EqualsAsciiCaseInsensitive(const std::string& a, const char* b) {
     return i == a.size() && b[i] == '\0';
 }
 
-/* Windows reserved device names (case-insensitive). Creating a folder
- * with one of these names succeeds on most filesystems but the OS
- * intercepts open() / CreateFile() afterwards and routes to the device,
- * which manifests as confusing "permission denied" / "invalid handle"
- * errors deep inside ExecuteMoves. Reject up front. */
+/* Names that route to a device on Windows. macOS treats them as plain
+ * filenames, but a user who triages a folder destined for a Windows
+ * share (SMB, cloud sync, archival) would hit confusing "permission
+ * denied" / "invalid handle" errors when the OS intercepts opens on
+ * the other end. Reject up front so the output stays portable. */
 const char* const kReservedDeviceNames[] = {
     "CON", "PRN", "AUX", "NUL",
     "COM0", "COM1", "COM2", "COM3", "COM4",
@@ -74,14 +74,10 @@ const char* const kReservedDeviceNames[] = {
 };
 
 bool IsReservedDeviceName(const std::string& name) {
-    /* Match the bare name OR <name>.<ext> — Windows treats "CON.txt"
-     * the same as "CON" for the device routing.
-     *
-     * find('.') (first dot), not find_last_of('.') (last dot): the
-     * Windows rule is "the part before the FIRST dot." A folder
-     * named "CON.foo.bar" routes to CON, so the device-name match
-     * must check "CON" — splitting at the last dot would compare
-     * "CON.foo" against the reserved list and miss. */
+    /* Match the bare name OR <name>.<ext> — the Windows routing rule
+     * looks at the prefix before the FIRST dot, so "CON.foo.bar" still
+     * routes to CON. Splitting at the last dot would compare "CON.foo"
+     * against the reserved list and miss. */
     std::string base = name;
     auto dot = base.find('.');
     if (dot != std::string::npos) base = base.substr(0, dot);
@@ -108,19 +104,21 @@ std::string ValidateSubfolderName(const std::string& name) {
         if (c == '\0')              return "must not contain a null byte";
     }
 
-    /* Windows reserved device names. Reject on every platform — a
-     * cross-platform user staging a junk folder under "NUL" probably
-     * didn't mean to ship something that explodes on Windows. The
-     * "CON.txt" form is also caught (Windows treats it the same). */
+    /* Reserved-on-Windows device names. Kept as a hard reject so the
+     * triage output stays safe to ship to a Windows share or sync
+     * target — a junk folder named "NUL" is fine on macOS but explodes
+     * the moment a Windows process touches it. The "CON.txt" form is
+     * also caught (Windows routes by the part before the first dot). */
     if (IsReservedDeviceName(name)) {
         return "reserved Windows device name (CON, NUL, COM*, LPT*, etc.)";
     }
 
     /* Trailing space or dot: Windows silently strips them when creating
-     * the directory, so "junk " and "junk" become the same folder.
-     * Surfacing the rejection here is friendlier than the surprise. */
-    if (name.back() == ' ') return "must not end with a space (Windows strips it)";
-    if (name.back() == '.') return "must not end with a dot (Windows strips it)";
+     * the directory, so "junk " and "junk" would collapse to the same
+     * folder on a Windows share. Reject here for the same portability
+     * reason as the reserved-name check. */
+    if (name.back() == ' ') return "must not end with a space (would be stripped on Windows)";
+    if (name.back() == '.') return "must not end with a dot (would be stripped on Windows)";
 
     return "";  /* OK */
 }
@@ -139,15 +137,11 @@ void ValidateConfig(const Config& cfg) {
 }
 
 bool IsKnownJunkBasename(const std::filesystem::path& p) {
-    /* path::filename() returns just the last component. .string()
-     * converts to the platform-native narrow string; for ASCII names
-     * (which all kKnownJunkBasenames are, including the trailing CR
-     * in "Icon\r"), this is byte-stable across platforms.
-     *
-     * Comparison goes through PlatformBasenameEquals so a Windows user
-     * with "thumbs.db" (whatever app touched it last lowered the case)
-     * still matches the canonical "Thumbs.db" in our table — NTFS treats
-     * them as the same file. */
+    /* path::filename() returns just the last component. .string() is
+     * byte-stable for the ASCII names in kKnownJunkBasenames (including
+     * the trailing CR in "Icon\r"). PlatformBasenameEquals is the
+     * documented seam if this code ever needs to fold case for a
+     * cross-platform recompile. */
     const std::string name = p.filename().string();
     for (const char* known : kKnownJunkBasenames) {
         if (PlatformBasenameEquals(name, known)) return true;
@@ -174,11 +168,7 @@ std::size_t ReadHead(const std::filesystem::path& path,
                      std::size_t cap,
                      bool* io_failed) {
     *io_failed = false;
-#if defined(_WIN32)
-    std::FILE* f = ::_wfopen(path.wstring().c_str(), L"rb");
-#else
     std::FILE* f = std::fopen(path.string().c_str(), "rb");
-#endif
     if (!f) {
         *io_failed = true;
         return 0;

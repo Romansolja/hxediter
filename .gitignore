@@ -9,25 +9,17 @@ CMakeFiles/
 CMakeUserPresets.json
 cmake_install.cmake
 *.o
-*.obj
 *.a
-*.lib
 *.so
 *.dylib
-*.dll
-*.exe
 # Anchored to the repo root so a future source dir or asset named
 # `hxediter` (e.g. src/hxediter/) isn't silently swallowed. Only the
 # in-tree-build binary at ./hxediter is the intended target — actual
 # release builds land in build/ and are already covered above.
 /hxediter
 /hxsort
-/hxediter-updater-helper
-*.exp
-*.pdb
-*.ilk
-# macOS: Mach-O debug symbol bundles (clang emits these next to the exe
-# in some build configurations) and the .dmg release artifact (already
+# Mach-O debug symbol bundles (clang emits these next to the binary in
+# some build configurations) and the .dmg release artifact (already
 # covered by build/, kept here defensively in case someone runs cpack
 # elsewhere).
 *.dSYM/
@@ -36,7 +28,6 @@ cmake_install.cmake
 # IDE / editor
 .idea/
 .vscode/
-.vs/
 *.swp
 *.swo
 *~
@@ -47,8 +38,6 @@ imgui.ini
 
 # OS cruft
 .DS_Store
-Thumbs.db
-Desktop.ini
 # Apple metadata stored as separate ._* files on non-HFS filesystems
 # (USB sticks, network shares) — would otherwise pollute every dir.
 ._*
@@ -62,7 +51,6 @@ Desktop.ini
 # consumed by `xcrun notarytool` — either one alone is enough for an
 # attacker to ship a signed, notarized build under your identity.
 *.p12
-*.pfx
 *.p8
 *.pem
 *.key
@@ -76,10 +64,6 @@ Desktop.ini
 id_rsa
 id_ed25519
 
-# Per-release artifacts from the updater release workflow
+# Per-release artifacts from the release workflow
 SHA256SUMS.txt
-# Stray diagnostic build outputs (e.g. from PowerShell compile tests)
-test.obj
-hello.cpp
-winhello.cpp
 *.log

@@ -54,8 +54,9 @@ HexEditorCore::HexEditorCore(const std::string& filename)
             "Close it there first, then try again.");
     }
 
-    /* Close the probe handle immediately — Windows' share check is
-     * symmetric; holding write access would block external tools' saves. */
+    /* Probe-and-close to detect writability without holding the rb+
+     * handle open — actual edits go through transient handles via
+     * replace_byte_at_path / write_byte_at_path. */
     FILE* probe = open_file_shared(state_.filename, "rb+");
     if (probe != nullptr) {
         fclose(probe);
@@ -78,9 +79,7 @@ HexEditorCore::HexEditorCore(const std::string& filename)
      * within the previously-buffered region (POSIX leaves this
      * implementation-defined), so the hex grid renders the pre-edit
      * value forever even though the file on disk is correct and the
-     * status bar reports a successful edit. Windows stdio happens to
-     * invalidate aggressively enough that the bug doesn't manifest
-     * there, but enabling _IONBF unconditionally costs nothing —
+     * status bar reports a successful edit. _IONBF costs nothing —
      * ReadAt reads at most a few hundred bytes per frame and Search
      * reads in 4 KB chunks (larger than BUFSIZ), so the buffered
      * version was already doing one read() syscall per call.
@@ -88,7 +87,7 @@ HexEditorCore::HexEditorCore(const std::string& filename)
      * Check the return: setvbuf can fail (rare, but possible if some
      * libc impl flagged the FILE* as buffering-locked between fopen
      * and here). A silent fallback to default buffering would resurrect
-     * the macOS staleness bug; surface it instead. */
+     * the staleness bug; surface it instead. */
     if (setvbuf(state_.fp, nullptr, _IONBF, 0) != 0) {
         fclose(state_.fp);
         state_.fp = nullptr;
@@ -132,7 +131,7 @@ std::vector<unsigned char> HexEditorCore::ReadAt(int64_t offset, size_t count) c
     if ((int64_t)count > avail) count = (size_t)avail;
 
     std::vector<unsigned char> buf(count);
-    if (fseek64(state_.fp, offset, SEEK_SET) != 0)
+    if (fseeko(state_.fp, offset, SEEK_SET) != 0)
         return {};
 
     size_t got = fread(buf.data(), 1, count, state_.fp);
@@ -148,12 +147,12 @@ std::optional<EditResult> HexEditorCore::EditByte(int64_t offset, unsigned char 
     if (offset < 0 || offset >= state_.file_size)
         return std::nullopt;
 
-    /* Atomic read+write under one handle, with a one-byte exclusive lock
-     * on Windows so the undo stack always records the byte that was
-     * actually replaced. The previous code read the old byte through the
-     * long-lived read handle and then opened a separate write handle —
-     * a concurrent external writer could mutate the byte between those
-     * two calls, leaving the undo stack with a stale `old_val`. */
+    /* Atomic read+write under a single FILE* handle. The previous code
+     * read the old byte through the long-lived read handle and then
+     * opened a separate write handle — a concurrent external writer
+     * could mutate the byte between those two calls, leaving the undo
+     * stack with a stale `old_val`. Single-handle path narrows the
+     * window to sub-microsecond; see replace_byte_at_path. */
     unsigned char old_val = 0;
     if (replace_byte_at_path(state_.filename, offset, new_val, &old_val) != 0)
         return std::nullopt;

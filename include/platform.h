@@ -13,14 +13,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 
-#if defined(_WIN32)
-    #define fseek64(fp, off, whence) _fseeki64((fp), (__int64)(off), (whence))
-    #define ftell64(fp)              ((int64_t)_ftelli64(fp))
-#else
-    #include <sys/types.h>
-    #define fseek64(fp, off, whence) fseeko((fp), (off_t)(off), (whence))
-    #define ftell64(fp)              ((int64_t)ftello(fp))
-#endif
+#include <sys/types.h>
 
 #define INPUT_BUF_SIZE 128
 #define UNDO_MAX 64

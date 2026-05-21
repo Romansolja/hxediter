@@ -33,11 +33,6 @@ void SetStartupDuration(float duration_ms);
  * (help panel width, etc.) can multiply hardcoded pixel constants. */
 void SetContentScale(float scale);
 
-/* Called once at startup with the OS window handle (HWND on Windows,
- * cast to void*). Stored on GuiState so the start screen can parent the
- * native Open / Pick-Folder dialogs to the editor window. */
-void SetNativeWindowHandle(void* handle);
-
 /* Snapshot of the GuiState read-only default toggle. main.cpp consults
  * this right after constructing a HexEditorCore so the "Open files as
  * read-only" setting applies to newly loaded files. */
@@ -67,18 +62,7 @@ void SetExternalStatus(const std::string& msg, bool is_error);
  * folder's basename — both feed the tab-bar dropdown so users can pick
  * which file(s) to open from the directory. out_clear_directory, when
  * non-null and set true by the UI, signals the main loop to forget the
- * current directory listing (e.g. user clicked "Close folder").
- *
- * out_pending_triage_root receives a folder path when the user picks
- * one via the start screen's "Triage Folder..." button; main.cpp
- * transitions to AppState::FolderTriage and kicks off triage::StartScan.
- * out_request_triage_back is set true when the triage panel's Back
- * button is clicked; main.cpp transitions back to StartScreen.
- *
- * Note: the verified-installer-path handoff used to flow back through
- * out-params here. It now lives entirely in updater::ConsumeInstallerPath
- * which the main loop polls — the UI signals "ready" by closing its
- * popup. */
+ * current directory listing (e.g. user clicked "Close folder"). */
 void RenderHexEditorUI(AppState state,
                        std::vector<OpenDocument>* docs,
                        int* active_doc,
@@ -89,6 +73,4 @@ void RenderHexEditorUI(AppState state,
                        const std::vector<std::string>* directory_files,
                        const std::string* directory_label,
                        bool* out_clear_directory,
-                       std::vector<std::string>* out_pending_directories,
-                       std::vector<std::string>* out_pending_triage_root,
-                       bool* out_request_triage_back);
+                       std::vector<std::string>* out_pending_directories);

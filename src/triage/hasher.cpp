@@ -25,16 +25,7 @@ constexpr std::size_t kReadChunk = 64 * 1024;
 HashResult HashFile(const std::filesystem::path& path, std::uint64_t max_bytes) {
     HashResult out;
 
-    /* Use C stdio directly so we get a portable binary read on every
-     * platform; std::ifstream's binary mode has historical quirks on
-     * MinGW with paths that include non-ASCII bytes — fopen with the
-     * UTF-8 string the path holds works reliably here. */
-#if defined(_WIN32)
-    /* Windows wide-fopen for Unicode paths. */
-    std::FILE* f = ::_wfopen(path.wstring().c_str(), L"rb");
-#else
     std::FILE* f = std::fopen(path.string().c_str(), "rb");
-#endif
     if (!f) return out;  /* ok stays false */
 
     XXH3_state_t* st = XXH3_createState();

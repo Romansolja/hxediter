@@ -1,18 +1,15 @@
 #pragma once
 
 /* triage::scanner — async folder scan + classification + duplicate
- * detection. Single global instance per process; the GUI panel and the
- * CLI both consume the same API.
+ * detection. Single global instance per process; the hxsort CLI is the
+ * sole consumer on this branch.
  *
  * Lifecycle:
  *   StartScan()  -> spawns one detached outer thread
  *   GetProgress()-> snapshot copy, safe to call every frame
  *   RequestCancel()-> sets atomic; workers honour between files
  *   WaitForCompletion() -> blocks until state is terminal (CLI uses this)
- *   Reset()      -> clears state when starting fresh
- *
- * Mirrors the WithSnap-and-Snapshot pattern from updater.cpp; same shape,
- * different payload. */
+ *   Reset()      -> clears state when starting fresh */
 
 #include "triage/classifier.h"
 

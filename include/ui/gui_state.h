@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 struct ImFont;
 
@@ -58,38 +57,11 @@ struct GuiState {
     float startup_duration_ms = 0.0f;
     bool  startup_measured    = false;
 
-    /* Opaque OS window handle (HWND on Windows). Set once at startup from
-     * glfwGetWin32Window so platform::OpenFileDialog / PickFolderDialog
-     * can parent the native dialog to the editor window. */
-    void* native_window_handle = nullptr;
-
     /* Last tab index the bar saw selected. The render uses the delta with
      * `*active_doc` to apply ImGuiTabItemFlags_SetSelected exactly once
      * after a programmatic switch (Ctrl+Tab, tab close), without overriding
      * user clicks on subsequent frames. */
     int last_tab_active_seen = -1;
-
-    /* ---- Folder-triage panel state ----
-     * Only the bits that persist across frames AND need to be visible
-     * to main.cpp. Per-render transient state (table sort columns, move
-     * thread handle) lives in triage_panel.cpp file-locals — same
-     * isolation pattern updater.cpp uses. */
-    char              triage_filter_buf[128] = "";
-    /* Bitmask of which verdicts are visible in the table. Bit positions
-     * mirror the Verdict enum values (Useful=0, Junk=1, Duplicate=2,
-     * Unknown=3, Empty=4, Error=5). */
-    std::uint8_t      triage_filter_mask    = 0xFF;
-    /* Per-row checkbox state, parallel to ScanProgress::files at the
-     * time of last sync. The panel resizes this when the verdict count
-     * changes. */
-    std::vector<bool> triage_checked;
-    /* One-shot trigger for the move-confirmation popup; consumed by the
-     * popup-open call in the panel render. */
-    bool              triage_show_confirm   = false;
-    /* Which bucket the pending Move-confirm popup is for (0=junk,
-     * 1=review, 2=dup). Set when the user clicks one of the three Move
-     * buttons; read by the popup body. */
-    int               triage_confirm_target = 0;
 
     void SetStatus(std::string msg, StatusKind kind = STATUS_INFO,
                    bool sticky = false);

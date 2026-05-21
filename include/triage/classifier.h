@@ -112,8 +112,7 @@ bool IsKnownJunkBasename(const std::filesystem::path& p);
  * directories. Files inside these never reach the classifier, so they
  * don't show up in the verdict table at all (vs. being classified as
  * Junk, which would still surface them and slow the walk). The skip
- * applies at every depth, not just at the scan root. Comparison goes
- * through PlatformBasenameEquals so `.Venv` matches on NTFS. */
+ * applies at every depth, not just at the scan root. */
 extern const std::array<const char*, 4> kKnownJunkFolderBasenames;
 
 /* True iff path's basename matches kKnownJunkFolderBasenames. */

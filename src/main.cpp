@@ -2,11 +2,7 @@
 #include "gui.h"
 #include "app_state.h"
 #include "path_utils.h"
-#include "updater.h"
 #include "platform/asset_path.h"
-
-#include "triage/classifier.h"
-#include "triage/scanner.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -14,17 +10,6 @@
 #include "imgui_impl_opengl3.h"
 
 #include <GLFW/glfw3.h>
-
-#ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#  include <shellapi.h>
-#  include <shlobj.h>
-#  include <ole2.h>
-#  define GLFW_EXPOSE_NATIVE_WIN32
-#  include <GLFW/glfw3native.h>
-#  include "win_drop_target.h"
-#endif
 
 #include <algorithm>
 #include <chrono>
@@ -97,10 +82,6 @@ struct AppContext {
      * file. */
     std::vector<std::string>  directory_files;
     std::string               directory_label;        /* basename for the dropdown header */
-    /* Folder paths from the start screen's "Triage Folder..." button.
-     * Drained each frame; non-empty triggers transition to FolderTriage
-     * state and a triage::StartScan call. */
-    std::vector<std::string>  pending_triage_root;
     /* Canonical paths of every doc in `docs`. Mirrors docs membership; kept
      * in sync on every push_back / erase. Backs O(1) "is this file already
      * open?" checks during a multi-file drop — pairwise filesystem::equivalent
@@ -108,15 +89,6 @@ struct AppContext {
     std::unordered_set<std::string> open_canonical;
     std::string               load_error;
     GLFWwindow*               window = nullptr;
-    /* Set by Settings: absolute path to a SHA-verified installer in %TEMP%.
-     * The companion sha256 is forwarded to the elevated helper so it can
-     * re-verify before ShellExecute("runas") — closes the TOCTOU window
-     * between the unprivileged check and the privileged launch. */
-    std::string               installer_to_launch;
-    std::string               installer_sha256_to_launch;
-#ifdef _WIN32
-    platform::DragState       drag_over = platform::DragState::None;
-#endif
 };
 
 /* Returns a stable string key per file — weakly_canonical handles
@@ -164,211 +136,6 @@ static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
     glfwFocusWindow(w);
 }
 
-#ifdef _WIN32
-/* Mirror of updater::DebugLog so the main process can append to the same
- * %LOCALAPPDATA%\HxEditer\update_debug.log file as updater.cpp and the
- * helper. Kept file-static rather than added to the public updater API
- * because nothing else needs it. */
-static void DebugLog(const char* fmt, ...) {
-    PWSTR known = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &known))) {
-        if (known) CoTaskMemFree(known);
-        return;
-    }
-    std::wstring path = known;
-    CoTaskMemFree(known);
-    path += L"\\HxEditer";
-    CreateDirectoryW(path.c_str(), nullptr);
-    path += L"\\update_debug.log";
-
-    SYSTEMTIME st;
-    GetSystemTime(&st);
-    char ts[32];
-    std::snprintf(ts, sizeof(ts), "%04u-%02u-%02uT%02u:%02u:%02uZ",
-                  st.wYear, st.wMonth, st.wDay,
-                  st.wHour, st.wMinute, st.wSecond);
-
-    char body[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    std::vsnprintf(body, sizeof(body), fmt, ap);
-    va_end(ap);
-
-    /* Atomic-append via single-shot WriteFile under FILE_APPEND_DATA.
-     * See updater.cpp::DebugLog for the rationale — main, updater, and
-     * the helper all share this log file across process boundaries. */
-    char line[1280];
-    int  ln = std::snprintf(line, sizeof(line), "%s [main]    %s\r\n", ts, body);
-    if (ln <= 0) return;
-    /* On truncation, snprintf NUL-terminates at sizeof(line)-1; clamp
-     * to that so we never write the trailing NUL byte into the log. */
-    if (ln >= (int)sizeof(line)) ln = (int)sizeof(line) - 1;
-
-    HANDLE h = CreateFileW(path.c_str(),
-                           FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    DWORD wrote = 0;
-    WriteFile(h, line, (DWORD)ln, &wrote, nullptr);
-    CloseHandle(h);
-}
-
-/* NSIS can't delete a running binary from $INSTDIR, so the helper must run
- * from a copy in %TEMP%. The expected SHA256 (lowercase hex) is forwarded
- * so the elevated helper can re-verify the file's contents immediately
- * before ShellExecute("runas") — without that recheck, a process running
- * as the user could swap the file in %TEMP% between our check and the
- * UAC prompt and get arbitrary code elevated under the user's consent. */
-static bool LaunchUpdaterHelper(const std::string& installer_path_utf8,
-                                const std::string& installer_sha256_utf8,
-                                std::string& err_utf8) {
-    DebugLog("LaunchUpdaterHelper begin installer=\"%s\" sha256=%s",
-             installer_path_utf8.c_str(), installer_sha256_utf8.c_str());
-
-    if (installer_sha256_utf8.size() != 64) {
-        err_utf8 = "missing or malformed SHA256 for installer";
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-
-    wchar_t exe_path[MAX_PATH];
-    DWORD n = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
-        err_utf8 = "GetModuleFileName failed";
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-
-    std::wstring exe_dir(exe_path);
-    size_t slash = exe_dir.find_last_of(L"\\/");
-    if (slash == std::wstring::npos) {
-        err_utf8 = "bad exe path";
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-    exe_dir.resize(slash);
-
-    std::wstring installed_helper = exe_dir + L"\\hxediter-updater-helper.exe";
-    bool helper_present =
-        GetFileAttributesW(installed_helper.c_str()) != INVALID_FILE_ATTRIBUTES;
-    {
-        int wide_len = (int)installed_helper.size();
-        int u8_len = WideCharToMultiByte(CP_UTF8, 0, installed_helper.c_str(),
-                                         wide_len, nullptr, 0, nullptr, nullptr);
-        std::string u8(u8_len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, installed_helper.c_str(), wide_len,
-                            u8.data(), u8_len, nullptr, nullptr);
-        DebugLog("LaunchUpdaterHelper installed_helper=\"%s\" exists=%d",
-                 u8.c_str(), helper_present ? 1 : 0);
-    }
-    if (!helper_present) {
-        err_utf8 = "updater helper is missing next to hxediter.exe";
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-
-    wchar_t tmp[MAX_PATH];
-    DWORD tn = GetTempPathW(MAX_PATH, tmp);
-    if (tn == 0 || tn >= MAX_PATH) {
-        err_utf8 = "GetTempPath failed";
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-    wchar_t helper_name[64];
-    swprintf(helper_name, 64, L"hxediter-updater-helper-%lu.exe",
-             (unsigned long)GetCurrentProcessId());
-    std::wstring temp_helper = std::wstring(tmp) + helper_name;
-
-    if (!CopyFileW(installed_helper.c_str(), temp_helper.c_str(), FALSE)) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "CopyFile failed (err %lu)",
-                      (unsigned long)GetLastError());
-        err_utf8 = buf;
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-    DebugLog("LaunchUpdaterHelper temp_helper copy_ok pid=%lu",
-             (unsigned long)GetCurrentProcessId());
-
-    int wide_n = MultiByteToWideChar(CP_UTF8, 0, installer_path_utf8.c_str(),
-                                     (int)installer_path_utf8.size(), nullptr, 0);
-    std::wstring winst(wide_n, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, installer_path_utf8.c_str(),
-                        (int)installer_path_utf8.size(),
-                        winst.data(), wide_n);
-
-    /* SHA256 is plain hex (64 bytes ASCII), so a single-byte widen is
-     * sufficient; no need for MultiByteToWideChar. */
-    std::wstring wsha;
-    wsha.reserve(installer_sha256_utf8.size());
-    for (char c : installer_sha256_utf8) {
-        wsha.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-    }
-
-    /* Installer path may contain spaces — quote it.
-     * %ls (not %s) for the wide path: on MinGW-MSVCRT, wide swprintf
-     * treats %s as char*, so a wchar_t* gets read as bytes and stops at
-     * the first NUL — collapsing "C:\Users\..." to "C".
-     *
-     * argv[4] is the currently-running exe path, passed as a fallback
-     * hint for the helper's post-install relaunch. The helper prefers
-     * the registry value the NSIS installer writes; this argv only
-     * matters if the registry lookup comes up empty (corrupted hive,
-     * portable / dev build with no install record). Buffer is sized
-     * for two quoted MAX_PATH paths plus PID + 64-char SHA + spaces. */
-    wchar_t args[MAX_PATH * 2 + 512];
-    swprintf(args, MAX_PATH * 2 + 512, L"\"%ls\" %lu %ls \"%ls\"",
-             winst.c_str(), (unsigned long)GetCurrentProcessId(),
-             wsha.c_str(), exe_path);
-
-    {
-        int wlen = (int)wcslen(args);
-        int u8_len = WideCharToMultiByte(CP_UTF8, 0, args, wlen,
-                                         nullptr, 0, nullptr, nullptr);
-        std::string u8(u8_len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, args, wlen,
-                            u8.data(), u8_len, nullptr, nullptr);
-        DebugLog("LaunchUpdaterHelper args=\"%s\"", u8.c_str());
-    }
-
-    HINSTANCE r = ShellExecuteW(nullptr, L"open", temp_helper.c_str(),
-                                 args, nullptr, SW_SHOWNORMAL);
-    DebugLog("LaunchUpdaterHelper ShellExecute(open) hInstApp=%lld",
-             (long long)(INT_PTR)r);
-    if ((INT_PTR)r <= 32) {
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "ShellExecute failed (code %lld)",
-                      (long long)(INT_PTR)r);
-        err_utf8 = buf;
-        DebugLog("LaunchUpdaterHelper fail: %s", err_utf8.c_str());
-        return false;
-    }
-    return true;
-}
-
-/* `argv` on Windows is the system ANSI code page (typically CP1252), not
- * UTF-8 — non-ASCII paths from "Open with…" or `cmd` would silently
- * mangle. Re-fetch from the wide command line. */
-static std::vector<std::string> CollectUtf8Args() {
-    std::vector<std::string> out;
-    int wc = 0;
-    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &wc);
-    if (!wargv) return out;
-    for (int i = 1; i < wc; ++i) {  /* skip exe name */
-        int n = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
-                                    nullptr, 0, nullptr, nullptr);
-        if (n <= 1) continue;
-        std::string s(n - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1,
-                            s.data(), n, nullptr, nullptr);
-        out.push_back(std::move(s));
-    }
-    LocalFree(wargv);
-    return out;
-}
-#endif
 
 static std::string BuildBatchError(const std::string& first, int additional) {
     if (first.empty()) return std::string();
@@ -406,14 +173,9 @@ int main(int argc, char* argv[]) {
     /* CLI args: each argument is a file or directory; directories are
      * expanded recursively. Same code path as a multi-file drag-drop. */
     std::vector<std::string> utf8_args;
-#ifdef _WIN32
-    utf8_args = CollectUtf8Args();
-    (void)argc; (void)argv;
-#else
     for (int i = 1; i < argc; ++i) {
         if (argv[i]) utf8_args.emplace_back(argv[i]);
     }
-#endif
     for (const std::string& a : utf8_args) {
         std::error_code ec;
         std::filesystem::path fsp = PathFromUtf8(a);
@@ -456,64 +218,29 @@ int main(int argc, char* argv[]) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-#ifdef _WIN32
-    /* Replace GLFW's IDropTarget with ours so we get DragEnter/Over/Leave
-     * in addition to Drop. OleInitialize is refcounted; safe even though
-     * GLFW already called it. */
-    HWND hwnd = glfwGetWin32Window(window);
-    OleInitialize(nullptr);
-    RevokeDragDrop(hwnd);
-    platform::WinDropTarget* drop_target =
-        new platform::WinDropTarget(&ctx.drag_over,
-                                    &ctx.pending_paths,
-                                    &ctx.pending_directories);
-    /* Surface RegisterDragDrop failures: an unchecked HRESULT here would
-     * silently disable drag-and-drop with no diagnostic. The shutdown
-     * path's RevokeDragDrop+Release is balanced regardless of whether
-     * registration took, so we don't need to back-out the new on
-     * failure — the Release below brings the refcount to zero either
-     * way. */
-    HRESULT rdd_hr = RegisterDragDrop(hwnd, drop_target);
-    if (FAILED(rdd_hr)) {
-        std::fprintf(stderr,
-            "[drop] RegisterDragDrop failed (hr=0x%08lx); "
-            "drag-and-drop will not work this session\n",
-            (unsigned long)rdd_hr);
-    }
-    /* The start screen's native Open / Folder-picker dialogs are parented
-     * to this HWND so they stay modal-attached to the editor window. */
-    SetNativeWindowHandle(hwnd);
-#endif
-
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    /* Redirect ImGui's window-layout state file out of cwd. On macOS the
-     * app launches from /Applications with cwd = "/" (read-only), so the
+    /* Redirect ImGui's window-layout state file out of cwd. The app
+     * launches from /Applications with cwd = "/" (read-only), so the
      * default "imgui.ini" silently fails to save — dock layout / column
      * widths reset on every launch. Pointing at ~/Library/Application
-     * Support/hxediter/ fixes it. On Windows / Linux AppSupportDir()
-     * returns "" and we leave IniFilename at the ImGui default, preserving
-     * the existing cwd-relative behavior. The std::string is static so
-     * the c_str() pointer ImGui holds outlives every frame. Guarded on
-     * empty() up front so non-Apple builds never allocate the joined
-     * path string at all. */
+     * Support/hxediter/ fixes it. The std::string is static so the
+     * c_str() pointer ImGui holds outlives every frame. */
     if (!platform::AppSupportDir().empty()) {
         static const std::string g_imgui_ini_path =
             platform::AppSupportDir() + "imgui.ini";
         io.IniFilename = g_imgui_ini_path.c_str();
     }
 
-#ifdef __APPLE__
     /* Native-feeling text-input shortcuts in InputText widgets: Cmd+A
      * select-all, Cmd+C / Cmd+V / Cmd+X copy/paste/cut, Option-arrow word
      * jump. Also flips ImGuiMod_Shortcut to map to Cmd (KeySuper) — but
      * we don't rely on that detail; gui.cpp gates on ConfigMacOSXBehaviors
      * explicitly. Must be set before the first frame. */
     io.ConfigMacOSXBehaviors = true;
-#endif
 
     ImGui::StyleColorsDark();
 
@@ -536,42 +263,12 @@ int main(int argc, char* argv[]) {
     ui_cfg.OversampleV = 2;
     ImFontConfig mono_cfg = ui_cfg;
 
-    /* Resolve the Windows fonts folder via SHGetKnownFolderPath rather
-     * than hardcoding "C:\\Windows\\Fonts\\". Domain-joined / OS-on-D:
-     * machines and Windows-on-ARM systems can have %WINDIR% (and the
-     * fonts dir inside it) on a different drive — the hardcoded path
-     * silently misses there. */
-    /* platform::ResourceDir() returns "" on Windows/Linux (relative path
-     * resolves via cwd / POST_BUILD staging) and the bundle's
-     * Resources/ path on macOS (so a .app launched from /Applications can
-     * find its fonts). Prefixing here means the loop below is platform-
-     * agnostic. */
+    /* platform::ResourceDir() returns the .app's Contents/Resources path
+     * (so a bundle launched from /Applications can find its fonts).
+     * Prefixing here keeps the candidate lists uniform. */
     const std::string& res_dir = platform::ResourceDir();
-    std::vector<std::string> ui_font_candidates =   { res_dir + "assets/fonts/Roboto-Regular.ttf" };
+    std::vector<std::string> ui_font_candidates   = { res_dir + "assets/fonts/Roboto-Regular.ttf" };
     std::vector<std::string> mono_font_candidates = { res_dir + "assets/fonts/JetBrainsMono-Regular.ttf" };
-#ifdef _WIN32
-    {
-        PWSTR fonts_w = nullptr;
-        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Fonts, 0, nullptr, &fonts_w)) &&
-            fonts_w != nullptr) {
-            int n = WideCharToMultiByte(CP_UTF8, 0, fonts_w, -1,
-                                        nullptr, 0, nullptr, nullptr);
-            if (n > 1) {
-                std::string fonts_dir(static_cast<size_t>(n - 1), '\0');
-                WideCharToMultiByte(CP_UTF8, 0, fonts_w, -1,
-                                    fonts_dir.data(), n, nullptr, nullptr);
-                /* Append both the optionally-installed family (Roboto /
-                 * JetBrains Mono are not OS defaults) and the universally-
-                 * present Arial / Consolas fallbacks. */
-                ui_font_candidates.push_back(fonts_dir + "\\Roboto-Regular.ttf");
-                ui_font_candidates.push_back(fonts_dir + "\\arial.ttf");
-                mono_font_candidates.push_back(fonts_dir + "\\JetBrainsMono-Regular.ttf");
-                mono_font_candidates.push_back(fonts_dir + "\\consola.ttf");
-            }
-        }
-        if (fonts_w) CoTaskMemFree(fonts_w);
-    }
-#endif
 
     ImFont* ui_font = nullptr;
     for (const auto& path : ui_font_candidates) {
@@ -631,28 +328,8 @@ int main(int argc, char* argv[]) {
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     /* macOS Core Profile (which is what FORWARD_COMPAT above selects)
      * rejects GLSL #version 130 — Apple supports 3.2+ only, mapping to
-     * GLSL 150. Windows / Linux drivers accept 130 against the 3.3 Core
-     * context, so we keep that there to avoid retesting all rasterized
-     * primitives at a higher version. */
-#ifdef __APPLE__
+     * GLSL 150. */
     ImGui_ImplOpenGL3_Init("#version 150");
-#else
-    ImGui_ImplOpenGL3_Init("#version 130");
-#endif
-
-#ifdef _WIN32
-    {
-        std::string last_update_failure;
-        if (updater::ConsumeLastLaunchFailure(last_update_failure)) {
-            DebugLog("startup ConsumeLastLaunchFailure -> \"%s\"",
-                     last_update_failure.c_str());
-            updater::SetLaunchError(last_update_failure);
-        } else {
-            DebugLog("startup ConsumeLastLaunchFailure -> (no marker)");
-        }
-    }
-#endif
-    updater::InitAndMaybeCheck();
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     bool startup_measured = false;
@@ -681,14 +358,13 @@ int main(int argc, char* argv[]) {
             ctx.directory_files = std::move(files);
 
             /* Trim trailing slash before computing the basename so paths
-             * like "C:/foo/bar/" still produce "bar". Falls back to the
-             * whole path for drive roots. */
+             * like "/Users/me/docs/" still produce "docs". Falls back to
+             * the whole path for the filesystem root. */
             std::string label = chosen;
-            while (!label.empty() &&
-                   (label.back() == '\\' || label.back() == '/')) {
+            while (!label.empty() && label.back() == '/') {
                 label.pop_back();
             }
-            size_t slash = label.find_last_of("\\/");
+            size_t slash = label.find_last_of('/');
             if (slash != std::string::npos && slash + 1 < label.size()) {
                 label = label.substr(slash + 1);
             }
@@ -797,14 +473,9 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-#ifdef _WIN32
-        int drag_over_state = static_cast<int>(ctx.drag_over);
-#else
         int drag_over_state = 0;
-#endif
         ctx.close_indices.clear();
-        bool clear_directory     = false;
-        bool request_triage_back = false;
+        bool clear_directory = false;
         RenderHexEditorUI(ctx.state, &ctx.docs, &ctx.active_doc,
                           ctx.load_error.c_str(),
                           &ctx.pending_paths,
@@ -813,49 +484,7 @@ int main(int argc, char* argv[]) {
                           &ctx.directory_files,
                           &ctx.directory_label,
                           &clear_directory,
-                          &ctx.pending_directories,
-                          &ctx.pending_triage_root,
-                          &request_triage_back);
-
-        /* Triage flow: the start screen pushes the chosen folder into
-         * pending_triage_root; the panel sets request_triage_back when
-         * the user clicks Back. Mirrors the pending_directories drain
-         * pattern above. Only one triage scan at a time per process,
-         * which is enforced by triage::StartScan no-opping if a scan
-         * is already running. */
-        if (!ctx.pending_triage_root.empty()) {
-            std::vector<std::string> roots;
-            roots.swap(ctx.pending_triage_root);
-            /* Multi-folder triage isn't supported (one scanner singleton
-             * per process). Surface the dropped roots so the user knows
-             * the silent-discard happened — if they meant to triage all
-             * three, they can re-pick the others one at a time. */
-            if (roots.size() > 1) {
-                std::string msg = "Triage runs one folder at a time; using \"";
-                msg += roots.back();
-                msg += "\" and ignoring " +
-                       std::to_string(roots.size() - 1) + " other root(s).";
-                SetExternalStatus(msg, /*is_error=*/false);
-            }
-            const std::string& chosen = roots.back();
-            triage::Reset();
-            triage::Config cfg;
-            try {
-                triage::StartScan(PathFromUtf8(chosen), cfg, nullptr, nullptr);
-                ctx.state = AppState::FolderTriage;
-            } catch (const triage::ConfigError& e) {
-                /* Defensive: ValidateConfig with default Config can't
-                 * actually fail, but the catch keeps StartScan's noexcept
-                 * promise honest if the config ever gains user-set
-                 * fields here. */
-                ctx.load_error = std::string("triage init failed: ") + e.what();
-            }
-        }
-        if (request_triage_back) {
-            triage::RequestCancel();  /* don't leave a worker churning */
-            triage::Reset();
-            ctx.state = AppState::StartScreen;
-        }
+                          &ctx.pending_directories);
 
         if (clear_directory) {
             ctx.directory_files.clear();
@@ -899,29 +528,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-#ifdef _WIN32
-        /* Non-modal Settings popup can be dismissed mid-download; pull
-         * directly so the handoff fires regardless of popup visibility. */
-        if (ctx.installer_to_launch.empty()) {
-            updater::ConsumeInstallerPath(ctx.installer_to_launch,
-                                          ctx.installer_sha256_to_launch);
-        }
-
-        if (!ctx.installer_to_launch.empty()) {
-            std::string err;
-            if (LaunchUpdaterHelper(ctx.installer_to_launch,
-                                    ctx.installer_sha256_to_launch, err)) {
-                DebugLog("LaunchUpdaterHelper ok; closing window");
-                glfwSetWindowShouldClose(window, GLFW_TRUE);
-            } else {
-                DebugLog("LaunchUpdaterHelper failed: %s", err.c_str());
-                updater::SetLaunchError("Could not start updater: " + err);
-            }
-            ctx.installer_to_launch.clear();
-            ctx.installer_sha256_to_launch.clear();
-        }
-#endif
-
         ImGui::Render();
         int display_w, display_h;
         glfwGetFramebufferSize(window, &display_w, &display_h);
@@ -940,19 +546,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    /* Detached updater threads may still be running; signal them to drop
-     * results rather than writing into module state we're tearing down. */
-    updater::RequestAbandon();
-
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-
-#ifdef _WIN32
-    RevokeDragDrop(hwnd);
-    drop_target->Release();
-    OleUninitialize();
-#endif
 
     glfwDestroyWindow(window);
     glfwTerminate();

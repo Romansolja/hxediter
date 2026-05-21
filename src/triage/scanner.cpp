@@ -45,7 +45,7 @@ namespace {
  * keeps the struct alive even after main() returns. Without this, an
  * in-flight ScanWorker (mid-walk on a huge tree, or mid-hash on a large
  * file) would lock a destroyed mutex and signal a destroyed condvar
- * once main returns. Same fix applied in updater.cpp.
+ * once main returns.
  *
  * `active_workers` lets Reset() wait for in-flight outer workers to
  * acknowledge the cancel/token-bump and exit before returning. Without
@@ -108,11 +108,10 @@ bool WalkRoot(const fs::path& root,
               std::vector<WalkedFile>& out,
               const std::atomic<bool>& cancel,
               std::string& err_out) {
-    /* Filesystem-aware comparison via PlatformBasenameEquals — `_Junk`
-     * and `_junk` MUST match on NTFS or a renamed bucket would be
-     * re-scanned next run. std::set<std::string> uses byte equality
-     * which is wrong on Windows; iterate the three candidates and call
-     * the helper. Three entries; not worth a fancier container. */
+    /* Compare via PlatformBasenameEquals so the bucket-skip uses the
+     * same equality rule the rest of the triage code does — a renamed
+     * bucket folder must be re-recognised as a bucket on the next scan,
+     * not re-walked into. Three entries; not worth a fancier container. */
     const std::string buckets[] = {
         cfg.junk_subfolder,
         cfg.review_subfolder,
