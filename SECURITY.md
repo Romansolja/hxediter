@@ -33,11 +33,3 @@ the in-app updater. Users update by re-downloading the DMG from
 the [Releases](https://github.com/Romansolja/hxediter/releases)
 page; the published `SHA256SUMS.txt` matches the DMG bytes for
 manual verification (`shasum -a 256 HxEditer-X.Y.Z-macos-arm64.dmg`).
-
-## Audit log
-
-The triage feature writes a per-batch audit log in JSON Lines under
-`<root>/<junk_subfolder>/triage-log-<ts>.jsonl`. This is not security-
-sensitive (it just records `src -> dst` for moves the user already
-authorised), but it is structured rather than pipe-delimited so paths
-containing `|` round-trip cleanly.

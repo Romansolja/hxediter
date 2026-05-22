@@ -51,7 +51,6 @@ either platform works:
 
 **Not yet wired on macOS in v1:**
 - Auto-updater — re-download the DMG to update.
-- Folder triage workflow (code stays compiled, button hidden).
 
 ## Build
 

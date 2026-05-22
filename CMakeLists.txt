@@ -75,52 +75,9 @@ target_include_directories(hx_imgui PUBLIC
 target_link_libraries(hx_imgui PUBLIC glfw)
 
 # ---------------------------------------------------------------------------
-# nlohmann/json — single-header JSON parser for the GitHub releases API
-# ---------------------------------------------------------------------------
-set(JSON_BuildTests OFF CACHE INTERNAL "")
-set(JSON_Install    OFF CACHE INTERNAL "")
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(nlohmann_json)
-
-# ---------------------------------------------------------------------------
 # OpenGL (system library)
 # ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
-
-# ---------------------------------------------------------------------------
-# xxHash — single-header hash library (BSD 2-Clause), vendored at
-# third_party/xxhash. Exposed as INTERFACE so consumers just include the
-# header; the implementation is generated in the one TU that defines
-# XXH_IMPLEMENTATION (see src/triage/hasher.cpp).
-# ---------------------------------------------------------------------------
-add_library(xxhash INTERFACE)
-target_include_directories(xxhash INTERFACE third_party/xxhash)
-
-# ---------------------------------------------------------------------------
-# hxcore — pure-logic static lib shared by the hxediter GUI and the
-# hxsort CLI. No ImGui / GLFW / OpenGL deps. Holds path utilities,
-# low-level file I/O, and the triage classification module. Triage source
-# files are appended below as each one is implemented; this list is
-# always source-of-truth.
-# ---------------------------------------------------------------------------
-set(HXCORE_SOURCES
-    src/path_utils.cpp
-    src/fileops.cpp
-    src/triage/signatures.cpp
-    src/triage/hasher.cpp
-    src/triage/classifier.cpp
-    src/triage/move_actions.cpp
-    src/triage/scanner.cpp
-)
-add_library(hxcore STATIC ${HXCORE_SOURCES})
-target_include_directories(hxcore PUBLIC include)
-target_compile_features(hxcore PUBLIC cxx_std_17)
-target_link_libraries(hxcore PUBLIC xxhash)
 
 # ---------------------------------------------------------------------------
 # hxediter executable
@@ -130,6 +87,8 @@ set(HXEDITER_SOURCES
     src/gui.cpp
     src/hex_editor_core.cpp
     src/undo.cpp
+    src/path_utils.cpp
+    src/fileops.cpp
     src/ui/theme.cpp
     src/ui/gui_state.cpp
     src/ui/actions.cpp
@@ -158,9 +117,7 @@ target_include_directories(hxediter PRIVATE
     include
 )
 target_link_libraries(hxediter PRIVATE
-    hxcore
     hx_imgui glfw OpenGL::GL
-    nlohmann_json::nlohmann_json
     "-framework Cocoa"
 )
 
@@ -185,16 +142,6 @@ set_target_properties(hxediter PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.romansolja.hxediter"
     MACOSX_BUNDLE_COPYRIGHT "Copyright © 2026 Romansolja. MIT licensed.")
 
-# ---------------------------------------------------------------------------
-# hxsort — headless folder-triage CLI. Links hxcore + nlohmann_json only.
-# ---------------------------------------------------------------------------
-add_executable(hxsort src/cli/hxsort_main.cpp)
-target_link_libraries(hxsort PRIVATE
-    hxcore
-    nlohmann_json::nlohmann_json
-)
-target_compile_definitions(hxsort PRIVATE APP_VERSION="${PROJECT_VERSION}")
-
 # Stage runtime assets (fonts) into the .app's Contents/Resources/assets
 # directory on every build so font updates land without forcing a
 # reconfigure. platform::ResourceDir() returns [[NSBundle mainBundle]
@@ -214,9 +161,9 @@ add_custom_command(TARGET hxediter POST_BUILD
 # executable Mach-O and orphans Contents/Resources. The bundle is
 # self-contained (assets are inside Contents/Resources via POST_BUILD;
 # LICENSE/copyright are surfaced in Info.plist), so we don't ship loose
-# asset / hxsort / license files in the DMG — only the .app and the
-# /Applications symlink CPack's DragNDrop generator auto-adds. Cleaner
-# mount UX: one icon to drag.
+# asset / license files in the DMG — only the .app and the /Applications
+# symlink CPack's DragNDrop generator auto-adds. Cleaner mount UX: one
+# icon to drag.
 install(TARGETS hxediter BUNDLE DESTINATION .)
 
 # ---------------------------------------------------------------------------

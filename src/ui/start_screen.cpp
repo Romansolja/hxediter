@@ -135,8 +135,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     y += button_sz.y + gap_between_buttons;
     /* Second button: "Open Folder..." picks a directory and surfaces its
      * files in the tab-bar dropdown — same destination as a folder
-     * drag-drop or a folder passed on the CLI. Distinct from triage,
-     * which moves files into _junk/_review/_duplicates buckets. */
+     * drag-drop or a folder passed on the CLI. */
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
     if (ImGui::Button(button_folder_str, button_sz)) {
         if (auto picked = platform::PickFolderDialog("Choose a folder to open")) {
