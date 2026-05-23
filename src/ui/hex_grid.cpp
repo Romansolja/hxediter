@@ -34,15 +34,15 @@ static float ComputeHexRowWidth(float offset_w, float char_w, float byte_w,
 HexLayout ComputeHexLayout(float avail_w, float scale) {
     HexLayout L;
     L.bytes_per_line = 16;
-    /* CalcTextSize returns unscaled metrics (outer window's FontWindowScale
-     * is 1); multiply by scale so the layout matches what the grid child
-     * will actually render at SetWindowFontScale(scale). */
+    // CalcTextSize returns unscaled metrics (outer window's FontWindowScale
+    // is 1); multiply by scale so the layout matches what the grid child
+    // renders at SetWindowFontScale(scale).
     L.char_w   = ImGui::CalcTextSize("0").x * scale;
     L.byte_w   = ImGui::CalcTextSize("FF").x * scale;
     L.offset_w = ImGui::CalcTextSize("00000000").x * scale;
 
-    /* Step from very wide down. 4K / ultrawide can comfortably fit
-     * 128–256 bytes/row; the old cap of 64 left half the screen blank. */
+    // Step from very wide down. 4K / ultrawide can comfortably fit
+    // 128–256 bytes/row; the old cap of 64 left half the screen blank.
     int best = 1;
     for (int candidate = 256; candidate >= 8; candidate -= 4) {
         if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
@@ -113,8 +113,8 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     const int64_t bpl       = (int64_t)L.bytes_per_line;
     const bool    readonly  = core.IsReadOnly();
 
-    /* Total rows for the whole file. Clipper takes int — clamp at INT_MAX
-     * (covers ~32 GB at 16 BPL; beyond that we'd need a 64-bit clipper). */
+    // Total rows for the whole file. Clipper takes int — clamp at INT_MAX
+    // (covers ~32 GB at 16 BPL; beyond that we'd need a 64-bit clipper).
     int64_t total_rows64 = (file_size + bpl - 1) / bpl;
     if (total_rows64 < 0) total_rows64 = 0;
     int total_rows = (total_rows64 > (int64_t)INT_MAX)
@@ -123,12 +123,10 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
 
     const float line_h = ImGui::GetTextLineHeightWithSpacing();
 
-    /* Apply pending scroll *before* the clipper measures so the visible
-     * range uses the new ScrollY. Only act if the target row isn't already
-     * fully in view — otherwise arrow keys jerk-recenter the view on every
-     * keystroke. PgUp/PgDn move far enough that the target is always
-     * off-screen, so they re-center; arrow nav within the visible area
-     * leaves scroll alone. */
+    // Apply pending scroll *before* the clipper measures, so the visible
+    // range uses the new ScrollY. Only act if the target row isn't already
+    // fully in view — otherwise arrow keys would jerk-recenter on every
+    // keystroke. PgUp/PgDn always move off-screen so they re-center.
     if (doc.pending_scroll_offset >= 0 && bpl > 0) {
         const int64_t target_row    = doc.pending_scroll_offset / bpl;
         const float   target_y      = (float)target_row * line_h;
@@ -153,11 +151,11 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     clipper.Begin(total_rows, line_h);
     while (clipper.Step()) {
         const int first_row = clipper.DisplayStart;
-        const int last_row  = clipper.DisplayEnd;   /* exclusive */
+        const int last_row  = clipper.DisplayEnd;   // exclusive
         if (first_row >= last_row) continue;
 
-        /* Pull every visible row's bytes in one fread. ~30 visible rows ×
-         * 64 bytes/row = 1.9 KB; the disk cache absorbs it instantly. */
+        // Pull every visible row's bytes in one fread. ~30 visible rows ×
+        // 64 bytes/row ≈ 1.9 KB; the disk cache absorbs it instantly.
         const int64_t batch_offset = (int64_t)first_row * bpl;
         const int64_t batch_wanted = (int64_t)(last_row - first_row) * bpl;
         std::vector<unsigned char> batch =
@@ -186,11 +184,9 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
                 unsigned char b   = batch[(size_t)idx_in_batch];
 
                 ImGui::SameLine(L.byte_x[c]);
-                /* PushID(const void*) hashes the full 64-bit offset on a
-                 * 64-bit build, so bytes 0x00000000 and 0x80000000 don't
-                 * share an id even if the clipper ever ranges over them
-                 * in the same frame (current code can't, but a future
-                 * minimap could). */
+                // PushID(const void*) hashes the full 64-bit offset so
+                // 0x00000000 and 0x80000000 don't share an id — current
+                // clipper can't span both, but a future minimap could.
                 ImGui::PushID(reinterpret_cast<const void*>(
                     static_cast<uintptr_t>(off)));
 
@@ -231,9 +227,9 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
                             bg_col = ImGui::GetColorU32(caret_bg_col);
                         }
                         ImVec2 cp = ImGui::GetCursorScreenPos();
-                        /* Match the clipper's row height so the caret/hit
-                         * background covers the full row band, leaving no
-                         * sliver of zebra peeking through. */
+                        // Match the clipper's row height so the caret/hit
+                        // background covers the full row band, leaving no
+                        // sliver of zebra peeking through.
                         ImGui::GetWindowDrawList()->AddRectFilled(
                             ImVec2(cp.x - 1, cp.y),
                             ImVec2(cp.x + L.byte_w + 1, cp.y + line_h),
@@ -268,7 +264,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
             }
 
             ImGui::SameLine(L.ascii_x);
-            /* Sized for the worst case the layout loop can produce. */
+            // Sized for the worst case the layout loop can produce.
             char ascii_buf[257];
             int  ascii_len = 0;
             const int ascii_cap = (int)sizeof(ascii_buf) - 1;
@@ -277,7 +273,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
                 if (idx_in_batch >= batch_size) break;
                 unsigned char b = batch[(size_t)idx_in_batch];
                 if (ascii_len < ascii_cap)
-                    ascii_buf[ascii_len++] = (b >= 0x20 && b <= 0x7E) ? (char)b : '.';
+                    ascii_buf[ascii_len++] = theme::IsAsciiPrintable(b) ? (char)b : '.';
             }
             ascii_buf[ascii_len] = '\0';
             ImGui::TextUnformatted(ascii_buf);
@@ -290,4 +286,4 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     }
 }
 
-} /* namespace ui */
+} // namespace ui

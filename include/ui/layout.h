@@ -2,10 +2,10 @@
 
 namespace ui::layout {
 
-/* Hex grid spacing (multiples of character width). */
+// Hex grid spacing (multiples of character width).
 constexpr float kGapByteMul     = 0.7f;
-constexpr float kGapQuadMul     = 0.7f;   /* extra gap every 4 bytes */
-constexpr float kGapOctetMul    = 1.2f;   /* extra gap every 8 bytes */
+constexpr float kGapQuadMul     = 0.7f;   // extra gap every 4 bytes
+constexpr float kGapOctetMul    = 1.2f;   // extra gap every 8 bytes
 constexpr float kOffsetGapMul   = 2.0f;
 constexpr float kAsciiGapMul    = 2.0f;
 
@@ -21,9 +21,9 @@ constexpr float kBadgePadX     = 7.0f;
 constexpr float kBadgePadY     = 2.0f;
 constexpr float kBadgeRounding = 4.0f;
 
-constexpr float kStatusGroupGap = 14.0f; /* gap between logical groups on the status bar */
-constexpr float kStatusInGroup  = 6.0f;  /* gap between adjacent badges within a group */
-constexpr float kStatusGutter   = 8.0f;  /* min guaranteed gap before right-anchored metric */
+constexpr float kStatusGroupGap = 14.0f; // gap between logical groups on the status bar
+constexpr float kStatusInGroup  = 6.0f;  // gap between adjacent badges within a group
+constexpr float kStatusGutter   = 8.0f;  // min guaranteed gap before right-anchored metric
 
 constexpr float kHelpPanelWidth    = 460.0f;
 constexpr float kHelpPanelPadX     = 16.0f;
@@ -47,4 +47,4 @@ constexpr float kFontScaleMin  = 0.75f;
 constexpr float kFontScaleMax  = 2.00f;
 constexpr float kFontScaleStep = 0.10f;
 
-} /* namespace ui::layout */
+} // namespace ui::layout

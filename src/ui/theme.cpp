@@ -60,7 +60,7 @@ const Palette kDefault = {
     /* frame_border_size */ 1.0f,
 };
 
-/* Red/green axis shifted to blue/orange; chrome stays neutral. */
+// Red/green axis shifted to blue/orange; chrome stays neutral.
 const Palette kDeuteranopia = {
     /* text             */ ImVec4(0.94f, 0.95f, 0.97f, 1.00f),
     /* text_disabled    */ ImVec4(0.62f, 0.66f, 0.74f, 1.00f),
@@ -214,8 +214,8 @@ void PopEditorStyle() {
 
 ImVec4 ColorForByte(const Palette& p, unsigned char b) {
     if (b == 0x00) return p.byte_zero;
-    if (b >= 0x20 && b <= 0x7E) return p.byte_printable;
+    if (IsAsciiPrintable(b)) return p.byte_printable;
     return p.byte_other;
 }
 
-} /* namespace ui::theme */
+} // namespace ui::theme

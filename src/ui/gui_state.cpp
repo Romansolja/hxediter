@@ -17,4 +17,4 @@ void GuiState::MarkInteracted() {
     show_help       = false;
 }
 
-} /* namespace ui */
+} // namespace ui

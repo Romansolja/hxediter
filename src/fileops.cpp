@@ -1,5 +1,6 @@
 #include "fileops.h"
 
+#include <memory>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -60,15 +61,15 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
             remaining = (int)got - (int)(search_ptr - chunk);
         }
 
-        /* Overlap by pattern_len-1 so a pattern straddling chunks hits. */
+        // Overlap by pattern_len-1 so a pattern straddling chunks hits.
         pos += (int64_t)got - (pattern_len - 1);
     }
 
     return -1;
 }
 
-/* fflush surfaces deferred write errors here, not later as a confusing
- * seek failure. */
+// fflush surfaces deferred write errors here, not later as a confusing
+// seek failure.
 int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 {
     if (fseeko(fp, offset, SEEK_SET) != 0) return -1;
@@ -77,8 +78,8 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
     return 0;
 }
 
-/* Long-lived core handle stays read-only so external tools can still
- * open for write; each edit uses a transient write handle. */
+// Long-lived core handle stays read-only so external tools can still
+// open for write; each edit uses a transient write handle.
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 {
     FILE *wf = open_file_shared(path, "rb+");
@@ -88,52 +89,42 @@ int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
     return rc;
 }
 
-/* Atomic read-then-write under a single handle. The FILE-based path used
- * by the original EditByte was:
- *
- *     1. fseek(read_handle, offset)
- *     2. fgetc → captures `old_val`
- *     3. open separate write_handle
- *     4. write `new_val`
- *
- * Between steps 2 and 4 a concurrent external writer could mutate the
- * byte, leaving the undo stack with a stale `old_val`. We close that
- * window by running seek/read/seek/write under a single FILE* — no
- * close-and-reopen between the read and the write. We do not take an
- * OS-level advisory lock; the residual window between the read and the
- * write is sub-microsecond. */
+// Atomic read-then-write under a single FILE*. The previous two-handle
+// path (read on long-lived handle, then open separate write handle)
+// could let a concurrent external writer mutate the byte between read
+// and write, leaving undo with a stale old_val. Running seek/read/seek/
+// write on one rb+ FILE* closes the window to sub-microsecond. No OS
+// advisory lock — concurrent external writers are deliberately allowed.
 int replace_byte_at_path(const char *path, int64_t offset,
                          unsigned char new_val, unsigned char *out_old_val)
 {
     if (out_old_val == NULL) return -1;
-    FILE *wf = open_file_shared(path, "rb+");
-    if (wf == NULL) return -1;
+    std::unique_ptr<FILE, decltype(&std::fclose)>
+        wf(open_file_shared(path, "rb+"), &std::fclose);
+    if (!wf) return -1;
 
-    if (fseeko(wf, offset, SEEK_SET) != 0) { fclose(wf); return -1; }
-    int old_ch = fgetc(wf);
-    if (old_ch == EOF)                       { fclose(wf); return -1; }
-    if (fseeko(wf, offset, SEEK_SET) != 0)  { fclose(wf); return -1; }
-    if (fputc((int)new_val, wf) == EOF)      { fclose(wf); return -1; }
-    if (fflush(wf) != 0)                     { fclose(wf); return -1; }
+    if (fseeko(wf.get(), offset, SEEK_SET) != 0) return -1;
+    int old_ch = fgetc(wf.get());
+    if (old_ch == EOF)                           return -1;
+    if (fseeko(wf.get(), offset, SEEK_SET) != 0) return -1;
+    if (fputc((int)new_val, wf.get()) == EOF)    return -1;
+    if (fflush(wf.get()) != 0)                   return -1;
 
     *out_old_val = (unsigned char)old_ch;
-    fclose(wf);
     return 0;
 }
 
-/* POSIX has no notion of an OS-enforced sharing mode at open time;
- * external readers/writers are always allowed. Always returns false. */
+// POSIX has no OS-enforced sharing mode at open time. Always returns false.
 bool is_file_held_by_other_process(const char *path)
 {
     (void)path;
     return false;
 }
 
-/* mtime folded with size so truncations/appends within the same mtime
- * granularity still change the token. st_mtime is 1-second on macOS;
- * a same-second edit pair with unchanged size will collide, but in
- * practice the byte we just wrote is what HasExternalModification()
- * gets called against, so the false-negative is benign. */
+// mtime folded with size so same-second truncations/appends still flip
+// the token. st_mtime is 1-second on macOS; a same-second edit pair with
+// unchanged size collides, but HasExternalModification() is called against
+// bytes we just wrote, so the false-negative is benign.
 int64_t get_file_mtime_token(const char *path)
 {
     struct stat st;

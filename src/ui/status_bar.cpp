@@ -16,7 +16,7 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImVec2 ts      = ImGui::CalcTextSize(text);
     ImVec2 padding = ImVec2(layout::kBadgePadX, layout::kBadgePadY);
     ImVec2 p0      = ImGui::GetCursorScreenPos();
-    /* Baseline-align with AlignTextToFramePadding text on the same line. */
+    // Baseline-align with AlignTextToFramePadding text on the same line.
     float frame_pad_y = ImGui::GetStyle().FramePadding.y;
     p0.y += frame_pad_y - padding.y;
 
@@ -34,7 +34,7 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImGui::Dummy(size);
 }
 
-const char* GetContextualHint(const GuiState& /*s*/, const DocumentState& doc,
+const char* GetContextualHint(const DocumentState& doc,
                               const HexEditorCore& core) {
     if (doc.selected_byte >= 0)
         return "Type 1-2 hex digits, Enter to commit, Esc to cancel";
@@ -47,7 +47,7 @@ const char* GetContextualHint(const GuiState& /*s*/, const DocumentState& doc,
     return "Click any byte to edit, arrow keys to move, F1 for shortcuts";
 }
 
-/* Matches help_panel.cpp's close affordance so both sites read identically. */
+// Matches help_panel.cpp's close affordance so both sites read identically.
 static bool DismissButton(const char* id, float size,
                           const theme::Palette& pal, float alpha) {
     ImVec4 hover_c = pal.help_close_hover;  hover_c.w *= alpha;
@@ -86,9 +86,9 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
 
-    /* Caret offset (em-dash when nothing has been clicked) plus the file
-     * size in bytes. No more "page N/M" — the body scrolls freely. Size
-     * is decimal only; the hex twin was redundant noise. */
+    // Caret offset (em-dash when nothing has been clicked) plus file size
+    // in bytes. No "page N/M" — the body scrolls freely. Size is decimal
+    // only; the hex twin was redundant noise.
     if (doc.caret_byte >= 0) {
         ImGui::Text("0x%08" PRIX64 "   %" PRId64 " B",
                     (uint64_t)doc.caret_byte,
@@ -145,7 +145,7 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
         ImGui::EndTooltip();
     }
 
-    /* Sticky messages pin until the user clicks x; non-sticky fade on a timer. */
+    // Sticky messages pin until the user clicks x; non-sticky fade on a timer.
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -179,15 +179,15 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
         }
     }
 
-    /* Priority tail: sticky (above) > startup metric > contextual hint.
-     * Hint truncates with ellipsis then drops when <~3 chars fit. */
+    // Priority tail: sticky (above) > startup metric > contextual hint.
+    // Hint truncates with ellipsis then drops when <~3 chars fit.
     char metric[32];
     if (s.startup_measured)
         std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
     else
         std::snprintf(metric, sizeof(metric), "Startup: \xE2\x80\xA6");
 
-    const char* hint      = GetContextualHint(s, doc, core);
+    const char* hint      = GetContextualHint(doc, core);
     float       metric_w  = ImGui::CalcTextSize(metric).x;
     float       hint_full = ImGui::CalcTextSize(hint).x;
     float       char_w    = ImGui::CalcTextSize("A").x;
@@ -227,4 +227,4 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
     }
 }
 
-} /* namespace ui */
+} // namespace ui

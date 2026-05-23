@@ -74,8 +74,8 @@ void DoSearch(GuiState& s, DocumentState& doc, HexEditorCore& core) {
         s.SetStatus("Invalid hex pattern", GuiState::STATUS_ERROR);
         return;
     }
-    /* Resume search from just after the last hit so repeat-find advances
-     * through the file; fall back to caret or 0 on first search. */
+    // Resume from just after the last hit so repeat-find advances through
+    // the file; fall back to caret or 0 on first search.
     int64_t start = 0;
     if (doc.last_hit >= 0)        start = doc.last_hit + 1;
     else if (doc.caret_byte >= 0) start = doc.caret_byte;
@@ -95,8 +95,8 @@ void DoSearch(GuiState& s, DocumentState& doc, HexEditorCore& core) {
 }
 
 void DoUndo(GuiState& s, DocumentState& doc, HexEditorCore& core) {
-    /* External writer may have touched the same offset; restoring old_val
-     * would clobber it. Gate through the conflict modal. */
+    // External writer may have touched the same offset; restoring old_val
+    // would clobber it. Gate through the conflict modal.
     if (doc.externally_modified) {
         doc.conflict_modal_open = true;
         return;
@@ -126,7 +126,7 @@ void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core) {
         return;
     }
 
-    /* Stash the edit and gate through the modal instead of blind-overwriting. */
+    // Stash the edit and gate through the modal instead of blind-overwriting.
     if (doc.externally_modified) {
         doc.pending_edit_offset = doc.selected_byte;
         doc.pending_edit_value  = (unsigned char)v;
@@ -149,4 +149,4 @@ void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     doc.selected_byte = -1;
 }
 
-} /* namespace ui */
+} // namespace ui

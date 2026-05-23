@@ -1,10 +1,7 @@
-/* NSOpenPanel-backed implementation of platform::OpenFileDialog and
- * platform::PickFolderDialog.
- *
- * Thread-safety: NSOpenPanel must run on the main thread. GLFW's macOS
- * event loop is on the process main thread (= AppKit main thread), so
- * the ImGui button callbacks that invoke these functions are already on
- * the right thread — no GCD dispatch needed. */
+// NSOpenPanel-backed platform::OpenFileDialog and PickFolderDialog.
+// NSOpenPanel must run on the main thread; GLFW's macOS event loop runs
+// on the AppKit main thread, so ImGui button callbacks are already there.
+// No GCD dispatch needed.
 
 #ifdef __APPLE__
 
@@ -23,10 +20,9 @@ std::optional<std::string> RunPanel(const char* title,
         NSOpenPanel* panel = [NSOpenPanel openPanel];
         if (title && *title) {
             panel.title   = @(title);
-            /* Older macOS shows the title in the window chrome; newer
-             * versions hide it but the prompt below the file list still
-             * works as a heading. Setting both keeps the dialog readable
-             * everywhere. */
+            // Older macOS shows title in window chrome; newer versions
+            // hide it but the message below the file list still acts as
+            // a heading. Setting both keeps the dialog readable everywhere.
             panel.message = @(title);
         }
         panel.canChooseFiles            = can_choose_files       ? YES : NO;
@@ -34,16 +30,12 @@ std::optional<std::string> RunPanel(const char* title,
         panel.allowsMultipleSelection   = NO;
         panel.resolvesAliases           = YES;
         panel.canCreateDirectories      = can_choose_directories ? YES : NO;
-        /* Let the user navigate INTO .app/.bundle/.framework directories
-         * when picking a file. Without this NSOpenPanel treats packages
-         * as opaque single entities — picking Calculator.app returns the
-         * .app *directory* path, fopen("rb") opens the directory, ftell
-         * returns 0 (or block size), and the hex grid renders the offset
-         * column with no body. Hex-editor users want to inspect the
-         * Mach-O inside the bundle (Contents/MacOS/<exe>), so opening
-         * packages up is the right default. PickFolderDialog leaves it
-         * off — picking a "folder" should still treat .app as one
-         * entity since that's how the user thinks about it. */
+        // Let the user navigate INTO .app/.bundle/.framework directories
+        // when picking a file. Otherwise NSOpenPanel treats packages as
+        // opaque entities and returns the .app *directory* — hex-editor
+        // users want to inspect the Mach-O inside (Contents/MacOS/<exe>).
+        // PickFolderDialog leaves it off — a "folder" should treat .app
+        // as one entity, matching the user's mental model.
         if (can_choose_files && !can_choose_directories) {
             panel.treatsFilePackagesAsDirectories = YES;
         }
@@ -60,7 +52,7 @@ std::optional<std::string> RunPanel(const char* title,
     }
 }
 
-} /* anonymous namespace */
+} // anonymous namespace
 
 std::optional<std::string> OpenFileDialog(const char* title) {
     return RunPanel(title, /*can_choose_files=*/true,
@@ -72,6 +64,6 @@ std::optional<std::string> PickFolderDialog(const char* title) {
                            /*can_choose_directories=*/true);
 }
 
-} /* namespace platform */
+} // namespace platform
 
-#endif /* __APPLE__ */
+#endif // __APPLE__

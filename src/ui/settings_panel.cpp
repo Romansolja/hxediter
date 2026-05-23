@@ -13,17 +13,11 @@ namespace ui {
 
 namespace {
 
-/* Animated accordion: a button-toggled section whose body height eases
- * between 0 and the body's natural height with framerate-independent
- * exponential smoothing. State (open / current anim phase / measured
- * natural height) is owned by the caller's statics so each section can
- * persist independently across frames; the helper just consumes them.
- *
- * The body callback is invoked only at fully-open (anim==1) so the
- * height measurement doesn't see partially-rendered widgets; while
- * animating, a Dummy of the interpolated height drives the popup's
- * AlwaysAutoResize. Caller is responsible for any font Push/Pop around
- * the body (Appearance and Performance pop the surrounding mono font). */
+// Animated accordion section. Body is invoked only at fully-open
+// (anim == 1) so height measurement doesn't see partially-rendered
+// widgets; while animating, a Dummy of the interpolated height drives the
+// popup's AlwaysAutoResize. State (open/anim phase/measured natural
+// height) is owned by the caller's statics — the helper just consumes them.
 void RenderAccordionSection(const char* label,
                             bool* open,
                             float* anim,
@@ -31,14 +25,13 @@ void RenderAccordionSection(const char* label,
                             const std::function<void()>& body) {
     const float dt     = ImGui::GetIO().DeltaTime;
     const float target = *open ? 1.0f : 0.0f;
-    const float rate   = 8.0f;  /* ~200ms feel, framerate-independent */
+    const float rate   = 8.0f;  // ~200ms feel, framerate-independent
     *anim += (target - *anim) * (1.0f - std::pow(0.1f, dt * rate));
     if (std::fabs(*anim - target) < 0.002f) *anim = target;
 
-    /* Zero ItemSpacing BEFORE the button — ImGui bakes the spacing at
-     * the end of each item using the style active at that moment.
-     * Pushing after the button is too late (the row's bottom margin is
-     * already committed). */
+    // Zero ItemSpacing BEFORE the button. ImGui bakes spacing at item
+    // end using the style active at that moment; pushing after the
+    // button is too late (the row's bottom margin is already committed).
     const ImVec2 natural_item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
@@ -48,10 +41,10 @@ void RenderAccordionSection(const char* label,
     }
     ImGui::PopStyleVar();
 
-    /* While animating, render only a Dummy of cur_h so the popup's
-     * auto-size sees a smooth interpolation. At anim==1 we render the
-     * real content and capture content_h from the natural height so the
-     * Dummy → content handoff is sub-pixel invisible. */
+    // While animating, render only a Dummy of cur_h so the popup's
+    // auto-size sees a smooth interpolation. At anim==1 we render the
+    // real content and recapture content_h, so the Dummy → content
+    // handoff is sub-pixel invisible.
     const float cur_h = (*content_h) * (*anim);
     if (cur_h > 0.5f) {
         if (*anim >= 1.0f) {
@@ -68,7 +61,7 @@ void RenderAccordionSection(const char* label,
         }
     }
 
-    ImGui::PopStyleVar(); /* ItemSpacing */
+    ImGui::PopStyleVar(); // ItemSpacing
 }
 
 
@@ -121,12 +114,12 @@ void RenderPerformanceSection(GuiState& s) {
     ImGui::PopStyleColor();
 }
 
-} /* anonymous namespace */
+} // anonymous namespace
 
 void RenderSettingsPopup(GuiState& s) {
 
-    /* Floating tray below the gear. Non-modal so the editor stays
-     * interactive; all literals scale with content_scale for HiDPI. */
+    // Floating tray below the gear. Non-modal so the editor stays
+    // interactive; all literals scale with content_scale for HiDPI.
     const float kPanelW   = 260.0f * s.content_scale;
     const float kTopPad   = 34.0f  * s.content_scale;
     const float kRightPad = 8.0f   * s.content_scale;
@@ -135,7 +128,7 @@ void RenderSettingsPopup(GuiState& s) {
     ImVec2 anchor(vp->Pos.x + vp->Size.x - kPanelW - kRightPad,
                   vp->Pos.y + kTopPad);
     ImGui::SetNextWindowPos(anchor, ImGuiCond_Always);
-    /* Width locked, height auto-grows with the open accordions. */
+    // Width locked, height auto-grows with the open accordions.
     ImGui::SetNextWindowSizeConstraints(ImVec2(kPanelW, 0.0f),
                                         ImVec2(kPanelW, FLT_MAX));
 
@@ -153,10 +146,9 @@ void RenderSettingsPopup(GuiState& s) {
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
 
-    /* Two accordions, identical animation/measurement scaffold; the
-     * helper owns the math and renders the body via a callback. Body
-     * font is the caller's call: Appearance and Performance read better
-     * in the UI font, so they pop+push the surrounding mono_font. */
+    // Two accordions on the same animation scaffold. Body font is the
+    // caller's call: Appearance and Performance read better in the UI
+    // font, so each callback pops+pushes the surrounding mono_font.
     {
         static bool  open      = false;
         static float anim      = 0.0f;
@@ -187,4 +179,4 @@ void RenderSettingsPopup(GuiState& s) {
     ImGui::PopStyleVar(2);
 }
 
-} /* namespace ui */
+} // namespace ui

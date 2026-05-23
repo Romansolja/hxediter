@@ -41,10 +41,17 @@ extern const Palette kHighContrast;
 const Palette& Active(GuiState::Palette p);
 const char*    Name  (GuiState::Palette p);
 
-/* Must be matched by PopEditorStyle(). */
+// Must be matched by PopEditorStyle().
 void PushEditorStyle(const Palette& p);
 void PopEditorStyle();
 
 ImVec4 ColorForByte(const Palette& p, unsigned char b);
 
-} /* namespace ui::theme */
+// Printable 7-bit ASCII range — space (0x20) through tilde (0x7E). Used
+// by the hex grid for ASCII gutter rendering and by ColorForByte for
+// glyph-tint selection. Keep both sites in sync via this single helper.
+constexpr bool IsAsciiPrintable(unsigned char b) {
+    return b >= 0x20 && b <= 0x7E;
+}
+
+} // namespace ui::theme

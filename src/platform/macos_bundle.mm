@@ -1,9 +1,7 @@
-/* Apple impls of platform::ResourceDir() and platform::AppSupportDir().
- *
- * Both functions return references to static locals so callers can take
- * a stable .c_str() (in particular, io.IniFilename in main.cpp expects a
- * const char* that lives for the program lifetime). NSBundle / NSFileManager
- * are thread-safe for these read-only / idempotent-create patterns. */
+// Apple impls of platform::ResourceDir() and platform::AppSupportDir().
+// Both return references to static locals so callers can take a stable
+// .c_str() (io.IniFilename in main.cpp expects a program-lifetime const
+// char*). NSBundle / NSFileManager are thread-safe for these patterns.
 
 #ifdef __APPLE__
 
@@ -29,24 +27,20 @@ const std::string& ResourceDir() {
 const std::string& AppSupportDir() {
     static const std::string cached = [] {
         @autoreleasepool {
-            /* Unsandboxed flow — NSHomeDirectory() gives the user's real
-             * $HOME. If this binary is ever sandboxed (e.g. for the Mac
-             * App Store) switch to
-             *   NSSearchPathForDirectoriesInDomains(
-             *       NSApplicationSupportDirectory, NSUserDomainMask, YES)
-             * which resolves correctly under both runtimes. */
+            // Unsandboxed flow — NSHomeDirectory() gives the user's real
+            // $HOME. If this binary is ever sandboxed (e.g. for the Mac
+            // App Store) switch to NSSearchPathForDirectoriesInDomains(
+            // NSApplicationSupportDirectory, NSUserDomainMask, YES), which
+            // resolves correctly under both runtimes.
             NSString* path = [NSString stringWithFormat:
                 @"%@/Library/Application Support/hxediter",
                 NSHomeDirectory()];
 
-            /* If creation fails (corrupted home, sandbox spec mismatch,
-             * disk full at the wrong moment) ImGui's later write of
-             * imgui.ini lands in the void and the user gets a layout
-             * that doesn't persist — same failure mode as the v1
-             * "imgui.ini in cwd" bug we just fixed. Surface the
-             * NSError to stderr so a future "why doesn't my dock
-             * layout persist?" report has a breadcrumb. Non-fatal:
-             * worst case we degrade to the pre-fix behavior. */
+            // If creation fails, ImGui's later imgui.ini write lands in
+            // the void and the user's layout doesn't persist — same
+            // failure mode as the "imgui.ini in cwd" bug. Surface NSError
+            // to stderr so a future "why doesn't my layout persist?"
+            // report has a breadcrumb. Non-fatal.
             NSError* err = nil;
             BOOL ok = [[NSFileManager defaultManager]
                 createDirectoryAtPath:path
@@ -66,6 +60,6 @@ const std::string& AppSupportDir() {
     return cached;
 }
 
-} /* namespace platform */
+} // namespace platform
 
-#endif /* __APPLE__ */
+#endif // __APPLE__

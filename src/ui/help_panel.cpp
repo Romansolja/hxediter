@@ -6,8 +6,8 @@
 namespace ui {
 
 void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
-    /* Combined font zoom + HiDPI multiplier so pixel constants stay
-     * proportional on 4K. */
+    // Combined font zoom + HiDPI multiplier so pixel constants stay
+    // proportional on 4K.
     const float scale = s.font_scale * s.content_scale;
 
     const char* lines[] = {
@@ -40,8 +40,8 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
 
     if (shown_h < 20.0f) return;
 
-    /* Center in the hex view's visible rect (screen-space) so the panel
-     * stays put as rows fill the page or the user scrolls. */
+    // Center in the hex view's visible rect (screen-space) so the panel
+    // stays put as rows fill the page or the user scrolls.
     const ImVec2 win_pos  = ImGui::GetWindowPos();
     const ImVec2 win_size = ImGui::GetWindowSize();
     const float  margin   = 16.0f * scale;
@@ -116,8 +116,8 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         }
     }
 
-    /* Restore cursor so subsequent widgets don't lay out from inside the panel. */
+    // Restore cursor so subsequent widgets don't lay out from inside the panel.
     ImGui::SetCursorScreenPos(saved_cursor);
 }
 
-} /* namespace ui */
+} // namespace ui

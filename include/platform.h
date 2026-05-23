@@ -1,7 +1,7 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
-/* MUST be defined before any system header is included. */
+// MUST be defined before any system header is included.
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
 #endif
@@ -15,7 +15,6 @@
 
 #include <sys/types.h>
 
-#define INPUT_BUF_SIZE 128
 #define UNDO_MAX 64
 #define SEARCH_CHUNK 4096
 

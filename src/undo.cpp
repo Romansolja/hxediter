@@ -1,6 +1,6 @@
 #include "undo.h"
 
-/* Oldest entry is silently overwritten when the ring is full. */
+// Oldest entry is silently overwritten when the ring is full.
 void undo_push(EditorState *state, int64_t offset,
                unsigned char old_val, unsigned char new_val)
 {
@@ -23,7 +23,7 @@ int undo_pop(EditorState *state, UndoEntry *out)
     return 1;
 }
 
-/* Roll back a pop whose write failed. Must be called immediately after. */
+// Roll back a pop whose write failed. Must be called immediately after.
 void undo_unpop(EditorState *state)
 {
     state->undo_head = (state->undo_head + 1) % UNDO_MAX;
