@@ -40,7 +40,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     const char* drop_str    = "Drag and drop a file or folder here";
     const char* button_str  = "Select File";
     const char* button_folder_str = "Open Folder...";
-    const float gap_between_buttons = 12.0f;
+    const float gap_between_buttons = 12.0f * s.chrome_scale;
 
     ImVec2 title_sz, icon_sz, drop_sz, button_label_sz, button_folder_label_sz;
 
@@ -63,17 +63,20 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     if (s.ui_font) ImGui::PopFont();
 
     ImGuiStyle& style = ImGui::GetStyle();
+    // Layout pixel constants follow chrome_scale so the start screen
+    // tracks the SetWindowFontScale applied to the main window.
+    const float cs = s.chrome_scale;
     // Both buttons share the widest label width so they line up
     // vertically. Heights are equal because text height is identical.
     float button_label_w = button_label_sz.x;
     if (button_folder_label_sz.x > button_label_w) button_label_w = button_folder_label_sz.x;
-    ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f,
-                     button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f);
+    ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f * cs,
+                     button_label_sz.y + style.FramePadding.y * 2.0f + 12.0f * cs);
 
-    const float gap_icon_to_title  = layout::kStartIconToTitle;
-    const float gap_title_to_drop  = layout::kStartTitleToDrop;
-    const float gap_drop_to_button = layout::kStartDropToButton;
-    const float gap_button_to_err  = layout::kStartButtonToErr;
+    const float gap_icon_to_title  = layout::kStartIconToTitle  * cs;
+    const float gap_title_to_drop  = layout::kStartTitleToDrop  * cs;
+    const float gap_drop_to_button = layout::kStartDropToButton * cs;
+    const float gap_button_to_err  = layout::kStartButtonToErr  * cs;
 
     float col_h = icon_sz.y + gap_icon_to_title
                 + title_sz.y + gap_title_to_drop
@@ -168,7 +171,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
 
     if (s.ui_font) ImGui::PushFont(s.ui_font);
     ImVec2 metric_sz = ImGui::CalcTextSize(metric);
-    const float pad = 12.0f;
+    const float pad = 12.0f * cs;
     ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - metric_sz.x - pad,
                                      origin.y + avail.y - metric_sz.y - pad));
     ImGui::TextDisabled("%s", metric);

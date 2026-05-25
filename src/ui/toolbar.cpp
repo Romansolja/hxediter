@@ -12,7 +12,10 @@ namespace ui {
 
 void RenderToolbar(GuiState& s, DocumentState& doc,
                    const theme::Palette& pal, HexEditorCore& core) {
-    const float group_gap = layout::kToolbarGroupGap;
+    // Layout pixel constants follow chrome_scale so spacing tracks the
+    // font scale applied by the main window's SetWindowFontScale.
+    const float cs        = s.chrome_scale;
+    const float group_gap = layout::kToolbarGroupGap * cs;
     const ImGuiStyle& style = ImGui::GetStyle();
     const float fp = style.FramePadding.x * 2.0f;
     const float is = style.ItemSpacing.x;
@@ -44,12 +47,12 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
     const float w_undo       = textw("Undo") + fp;
     const float w_help       = textw("?") + fp;
     const float w_gear       = ImGui::GetFrameHeight();
-    const float gear_pad     = 8.0f;
+    const float gear_pad     = 8.0f * cs;
 
-    const float goto_nominal   = layout::kGotoFieldWidth;
-    const float search_nominal = layout::kSearchFieldWidth;
-    const float goto_min       = 60.0f;
-    const float search_min     = 80.0f;
+    const float goto_nominal   = layout::kGotoFieldWidth   * cs;
+    const float search_nominal = layout::kSearchFieldWidth * cs;
+    const float goto_min       = 60.0f * cs;
+    const float search_min     = 80.0f * cs;
 
     bool show_undo         = true;
     bool show_find         = true;

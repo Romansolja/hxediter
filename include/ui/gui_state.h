@@ -46,6 +46,15 @@ struct GuiState {
     ImFont* icon_font_small = nullptr;  // narrow FA range at toolbar size
 
     float   font_scale = 1.0f;
+    // Independent zoom for chrome: toolbar, tab bar, status bar, and
+    // start screen. The hex grid scales via font_scale; this lets the
+    // user dial down chrome size without shrinking the hex view (or vice
+    // versa). Applied via SetWindowFontScale on the main window plus a
+    // per-call multiplier on layout::k* pixel constants in those renderers.
+    // Default tighter than 1.0 — ScaleAllSizes(content_scale) on HiDPI
+    // produces chrome that feels oversized; 0.85 lands closer to the
+    // intended visual density. Persists across launches via preferences.
+    float   chrome_scale = 0.85f;
     // HiDPI multiplier baked at startup from glfwGetWindowContentScale.
     // UI code multiplies hardcoded pixel layout constants by this to keep
     // proportions on 4K / high-DPI panels. Separate from font_scale so the

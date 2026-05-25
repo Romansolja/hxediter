@@ -10,11 +10,13 @@
 
 namespace ui {
 
-void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
+void Badge(const char* text, ImVec4 bg, ImVec4 fg, float chrome_scale,
+           float alpha) {
     bg.w *= alpha;
     fg.w *= alpha;
     ImVec2 ts      = ImGui::CalcTextSize(text);
-    ImVec2 padding = ImVec2(layout::kBadgePadX, layout::kBadgePadY);
+    ImVec2 padding = ImVec2(layout::kBadgePadX * chrome_scale,
+                            layout::kBadgePadY * chrome_scale);
     ImVec2 p0      = ImGui::GetCursorScreenPos();
     // Baseline-align with AlignTextToFramePadding text on the same line.
     float frame_pad_y = ImGui::GetStyle().FramePadding.y;
@@ -24,10 +26,11 @@ void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha) {
     ImVec2 p1(p0.x + size.x, p0.y + size.y);
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(bg), layout::kBadgeRounding);
+    const float rounding = layout::kBadgeRounding * chrome_scale;
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(bg), rounding);
     dl->AddRect(p0, p1,
                 ImGui::GetColorU32(ImVec4(fg.x, fg.y, fg.z, 0.35f * alpha)),
-                layout::kBadgeRounding, 0, 1.0f);
+                rounding, 0, 1.0f);
     dl->AddText(ImVec2(p0.x + padding.x, p0.y + padding.y),
                 ImGui::GetColorU32(fg), text);
 
@@ -83,6 +86,13 @@ static bool DismissButton(const char* id, float size,
 
 void RenderStatusBar(GuiState& s, DocumentState& doc,
                      const theme::Palette& pal, HexEditorCore& core) {
+    // Layout pixel constants follow chrome_scale so spacing tracks the
+    // SetWindowFontScale applied to the main window.
+    const float cs           = s.chrome_scale;
+    const float group_gap_px = layout::kStatusGroupGap * cs;
+    const float in_group_px  = layout::kStatusInGroup  * cs;
+    const float gutter_px    = layout::kStatusGutter   * cs;
+
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
 
@@ -97,29 +107,29 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
         ImGui::Text("\xE2\x80\x94   %" PRId64 " B", core.GetFileSize());
     }
 
-    ImGui::SameLine(0, layout::kStatusGroupGap);
-    Badge("OVR", pal.status_neutral_bg, pal.status_neutral_fg);
+    ImGui::SameLine(0, group_gap_px);
+    Badge("OVR", pal.status_neutral_bg, pal.status_neutral_fg, cs);
 
-    ImGui::SameLine(0, layout::kStatusInGroup);
-    if (core.IsReadOnly()) Badge("READ-ONLY", pal.status_read_bg,    pal.status_read_fg);
-    else                   Badge("EDIT",      pal.status_neutral_bg, pal.status_neutral_fg);
+    ImGui::SameLine(0, in_group_px);
+    if (core.IsReadOnly()) Badge("READ-ONLY", pal.status_read_bg,    pal.status_read_fg, cs);
+    else                   Badge("EDIT",      pal.status_neutral_bg, pal.status_neutral_fg, cs);
 
-    ImGui::SameLine(0, layout::kStatusInGroup);
+    ImGui::SameLine(0, in_group_px);
     int undos = core.GetUndoCount();
     if (undos > 0) {
         char buf[32];
         std::snprintf(buf, sizeof(buf), "MODIFIED %d", undos);
-        Badge(buf, pal.status_warn_bg, pal.status_warn_fg);
+        Badge(buf, pal.status_warn_bg, pal.status_warn_fg, cs);
     } else {
-        Badge("CLEAN", pal.status_ok_bg, pal.status_ok_fg);
+        Badge("CLEAN", pal.status_ok_bg, pal.status_ok_fg, cs);
     }
 
     if (doc.externally_modified) {
-        ImGui::SameLine(0, layout::kStatusInGroup);
-        Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg);
+        ImGui::SameLine(0, in_group_px);
+        Badge("EXTERNALLY MODIFIED", pal.status_err_bg, pal.status_err_fg, cs);
     }
 
-    ImGui::SameLine(0, layout::kStatusInGroup);
+    ImGui::SameLine(0, in_group_px);
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
@@ -162,8 +172,8 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
             if (alpha_raw > 1.0f) alpha_raw = 1.0f;
             alpha = (s.status_timer >= fade_window) ? 1.0f : alpha_raw;
         }
-        ImGui::SameLine(0, layout::kStatusGroupGap);
-        Badge(s.status_msg.c_str(), bg, fg, alpha);
+        ImGui::SameLine(0, group_gap_px);
+        Badge(s.status_msg.c_str(), bg, fg, cs, alpha);
 
         if (s.status_sticky) {
             ImGui::SameLine(0, 4.0f);
@@ -196,17 +206,17 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
     float line_start_x = ImGui::GetCursorPosX();
     float avail        = ImGui::GetContentRegionAvail().x;
 
-    bool  show_metric = (avail >= metric_w + layout::kStatusGutter);
-    float hint_room   = show_metric ? (avail - metric_w - layout::kStatusGutter) : avail;
-    bool  show_hint   = (hint_room >= layout::kStatusGroupGap + 3.0f * char_w);
+    bool  show_metric = (avail >= metric_w + gutter_px);
+    float hint_room   = show_metric ? (avail - metric_w - gutter_px) : avail;
+    bool  show_hint   = (hint_room >= group_gap_px + 3.0f * char_w);
     float hint_budget = 0.0f;
     if (show_hint) {
-        hint_budget = hint_room - layout::kStatusGroupGap;
+        hint_budget = hint_room - group_gap_px;
         if (hint_budget > hint_full) hint_budget = hint_full;
     }
 
     if (show_hint) {
-        ImGui::SameLine(0, layout::kStatusGroupGap);
+        ImGui::SameLine(0, group_gap_px);
         ImVec2 pos = ImGui::GetCursorScreenPos();
         pos.y += ImGui::GetStyle().FramePadding.y;
         ImGui::PushStyleColor(ImGuiCol_Text,

@@ -318,6 +318,10 @@ int main(int argc, char* argv[]) {
     // #version 130 — Apple supports 3.2+ only, mapping to GLSL 150.
     ImGui_ImplOpenGL3_Init("#version 150");
 
+    // Restore the user's last-saved sliders / palette / toggles before the
+    // first render so the first frame already reflects their preferences.
+    LoadGuiPreferences();
+
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     bool startup_measured = false;
 
@@ -520,6 +524,12 @@ int main(int argc, char* argv[]) {
             startup_measured = true;
         }
     }
+
+    // Persist the user's current settings before tearing ImGui down. Done
+    // here (rather than on every change) because the relevant fields all
+    // mutate from inside ImGui callbacks — saving on shutdown captures the
+    // final state with no per-widget plumbing.
+    SaveGuiPreferences();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

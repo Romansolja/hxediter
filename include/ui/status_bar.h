@@ -8,7 +8,8 @@
 
 namespace ui {
 
-void Badge(const char* text, ImVec4 bg, ImVec4 fg, float alpha = 1.0f);
+void Badge(const char* text, ImVec4 bg, ImVec4 fg,
+           float chrome_scale = 1.0f, float alpha = 1.0f);
 
 const char* GetContextualHint(const DocumentState& doc,
                               const HexEditorCore& core);

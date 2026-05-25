@@ -32,6 +32,17 @@ void SetStartupDuration(float duration_ms);
 // on GuiState so per-widget code can multiply hardcoded pixel constants.
 void SetContentScale(float scale);
 
+// Read persisted user preferences (slider values, palette, toggles) onto
+// the internal GuiState. Call once during init — before the first frame
+// so the loaded values drive the very first render. Missing or absent
+// file leaves compiled-in defaults intact.
+void LoadGuiPreferences();
+
+// Write current persisted-fields snapshot back to disk. Call once during
+// shutdown (after the main loop, before ImGui::DestroyContext). Failures
+// are logged to stderr; never throws.
+void SaveGuiPreferences();
+
 // Snapshot of the GuiState read-only default toggle. main.cpp consults
 // this after constructing a HexEditorCore so "Open files as read-only"
 // applies to newly loaded files.

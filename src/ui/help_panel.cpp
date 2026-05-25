@@ -33,10 +33,9 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
 
     const float pad_x   = layout::kHelpPanelPadX * scale;
     const float pad_y   = layout::kHelpPanelPadY * scale;
-    const float panel_w = layout::kHelpPanelWidth * scale;
+    float       panel_w = layout::kHelpPanelWidth * scale;
     float line_h = ImGui::GetTextLineHeightWithSpacing();
-    float panel_h = pad_y * 2 + line_h * (float)n;
-    float shown_h = panel_h * visibility;
+    float shown_h = (pad_y * 2 + line_h * (float)n) * visibility;
 
     if (shown_h < 20.0f) return;
 
@@ -45,8 +44,13 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
     const ImVec2 win_pos  = ImGui::GetWindowPos();
     const ImVec2 win_size = ImGui::GetWindowSize();
     const float  margin   = 16.0f * scale;
-    if (win_size.x < panel_w + margin) return;
-    if (win_size.y < shown_h + margin) return;
+    // Shrink to fit instead of vanishing when HiDPI + 100% font scale
+    // pushes the natural panel past the hex view child's bounds. The line
+    // loop below already drops rows that fall past the clamped bottom.
+    if (panel_w > win_size.x - margin) panel_w = win_size.x - margin;
+    if (shown_h > win_size.y - margin) shown_h = win_size.y - margin;
+    if (panel_w < layout::kHelpPanelMinW * scale ||
+        shown_h < layout::kHelpPanelMinH * scale) return;
 
     const ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
 
@@ -71,6 +75,14 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
                       layout::kHelpPanelRounding);
     dl->AddRect      (p0, p1, ImGui::GetColorU32(bd),
                       layout::kHelpPanelRounding, 0, 1.5f);
+
+    // Absorb clicks anywhere on the panel so they neither dismiss the
+    // overlay (HandleShortcuts' !IsAnyItemHovered() rule) nor fall through
+    // to the byte selectables underneath. AllowOverlap so the close button
+    // drawn next still wins in its top-right corner.
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::SetNextItemAllowOverlap();
+    ImGui::InvisibleButton("##help_blocker", ImVec2(panel_w, shown_h));
 
     const float x_sz = layout::kHelpCloseSize * scale;
     ImVec2 x_pos(p1.x - x_sz - 6.0f * scale, p0.y + 6.0f * scale);

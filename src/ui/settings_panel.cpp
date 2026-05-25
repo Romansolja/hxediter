@@ -82,27 +82,36 @@ void RenderAppearanceSection(GuiState& s) {
 
     ImGui::Spacing();
 
-    ImGui::TextDisabled("Font size:");
     const float reset_w  = ImGui::CalcTextSize("Reset").x +
                            ImGui::GetStyle().FramePadding.x * 2.0f;
     const float inner    = ImGui::GetStyle().ItemInnerSpacing.x;
     const float slider_w = ImGui::GetContentRegionAvail().x - reset_w - inner;
 
-    float pct = s.font_scale * 100.0f;
-    ImGui::SetNextItemWidth(slider_w);
-    if (ImGui::SliderFloat("##fontscale", &pct,
-                           layout::kFontScaleMin * 100.0f,
-                           layout::kFontScaleMax * 100.0f,
-                           "%.0f%%")) {
-        float v = pct / 100.0f;
-        if (v < layout::kFontScaleMin) v = layout::kFontScaleMin;
-        if (v > layout::kFontScaleMax) v = layout::kFontScaleMax;
-        s.font_scale = v;
-    }
-    ImGui::SameLine(0.0f, inner);
-    if (ImGui::Button("Reset")) {
-        s.font_scale = 1.0f;
-    }
+    auto ScaleSlider = [&](const char* label, const char* id,
+                           const char* reset_id, float* value) {
+        ImGui::TextDisabled("%s", label);
+        float pct = *value * 100.0f;
+        ImGui::SetNextItemWidth(slider_w);
+        if (ImGui::SliderFloat(id, &pct,
+                               layout::kFontScaleMin * 100.0f,
+                               layout::kFontScaleMax * 100.0f,
+                               "%.0f%%")) {
+            float v = pct / 100.0f;
+            if (v < layout::kFontScaleMin) v = layout::kFontScaleMin;
+            if (v > layout::kFontScaleMax) v = layout::kFontScaleMax;
+            *value = v;
+        }
+        ImGui::SameLine(0.0f, inner);
+        if (ImGui::Button(reset_id)) {
+            *value = 1.0f;
+        }
+    };
+
+    ScaleSlider("Hex view size:", "##fontscale", "Reset##fontreset",
+                &s.font_scale);
+    ImGui::Spacing();
+    ScaleSlider("Toolbar / status size:", "##chromescale",
+                "Reset##chromereset", &s.chrome_scale);
 }
 
 void RenderPerformanceSection(GuiState& s) {
@@ -152,7 +161,7 @@ void RenderSettingsPopup(GuiState& s) {
     {
         static bool  open      = false;
         static float anim      = 0.0f;
-        static float content_h = 80.0f;
+        static float content_h = 140.0f;
         RenderAccordionSection("Appearance##header", &open, &anim, &content_h, [&] {
             if (s.mono_font) ImGui::PopFont();
             RenderAppearanceSection(s);

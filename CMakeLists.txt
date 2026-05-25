@@ -98,6 +98,7 @@ set(HXEDITER_SOURCES
     src/ui/start_screen.cpp
     src/ui/help_panel.cpp
     src/ui/settings_panel.cpp
+    src/ui/preferences.cpp
 )
 
 if(APPLE)

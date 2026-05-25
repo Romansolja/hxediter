@@ -8,6 +8,7 @@
 #include "ui/help_panel.h"
 #include "ui/hex_grid.h"
 #include "ui/layout.h"
+#include "ui/preferences.h"
 #include "ui/scoped_tooltip.h"
 #include "ui/settings_panel.h"
 #include "ui/shortcuts.h"
@@ -465,6 +466,14 @@ void SetContentScale(float scale) {
     g_state.content_scale = (scale < 1.0f) ? 1.0f : scale;
 }
 
+void LoadGuiPreferences() {
+    ui::LoadPreferences(g_state);
+}
+
+void SaveGuiPreferences() {
+    ui::SavePreferences(g_state);
+}
+
 bool ReadonlyDefault() {
     return g_state.readonly_default;
 }
@@ -491,8 +500,10 @@ void RenderHexEditorUI(AppState state,
                        std::vector<std::string>* out_pending_directories) {
     auto& s = g_state;
 
-    // Only the hex grid scales; toolbar/settings/status stay at 100%.
-    // Per-child SetWindowFontScale below; keep FontGlobalScale at 1.0.
+    // Two independent zoom axes: chrome (toolbar/tab bar/status bar/start
+    // screen) scales via the main window's SetWindowFontScale below; the
+    // hex grid scales via per-child SetWindowFontScale on ##hexheader /
+    // ##hexview. Keep FontGlobalScale at 1.0 — both axes are per-window.
     ImGui::GetIO().FontGlobalScale = 1.0f;
 
     float dt = ImGui::GetIO().DeltaTime;
@@ -516,6 +527,11 @@ void RenderHexEditorUI(AppState state,
     // Fixed window id so ImGui doesn't restyle the container whenever the
     // active file name changes.
     ImGui::Begin("##hxediter_main", nullptr, flags);
+
+    // Chrome zoom for everything that renders directly in this window —
+    // toolbar, tab bar, status bar, and start screen. The hex header/body
+    // children override locally via their own SetWindowFontScale.
+    ImGui::SetWindowFontScale(s.chrome_scale);
 
     const auto& pal = ui::theme::Active(s.palette);
     ui::theme::PushEditorStyle(pal);
@@ -623,8 +639,18 @@ void RenderHexEditorUI(AppState state,
     ImGui::Separator();
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
+    // ComputeHexLayout's CalcTextSize calls inherit the current window's
+    // font scale, and the function is documented to assume that scale is
+    // 1.0 (it then multiplies by the `scale` arg itself). The main window
+    // is currently at chrome_scale for the toolbar/tab bar — restore 1.0
+    // for the layout calc so column widths match what the hex children
+    // render at (s.font_scale), then put chrome_scale back so the status
+    // bar reservation below (GetFrameHeightWithSpacing) and the status
+    // bar render itself stay in chrome scale.
+    ImGui::SetWindowFontScale(1.0f);
     ui::HexLayout layout =
         ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x, s.font_scale);
+    ImGui::SetWindowFontScale(s.chrome_scale);
 
     // Zero WindowPadding so header and body share window.Pos.x — the
     // SameLine(absolute_x) calls in both would otherwise land on different

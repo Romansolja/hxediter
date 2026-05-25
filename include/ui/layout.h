@@ -26,6 +26,8 @@ constexpr float kStatusInGroup  = 6.0f;  // gap between adjacent badges within a
 constexpr float kStatusGutter   = 8.0f;  // min guaranteed gap before right-anchored metric
 
 constexpr float kHelpPanelWidth    = 460.0f;
+constexpr float kHelpPanelMinW     =  80.0f; // below this we bail rather than render a stump
+constexpr float kHelpPanelMinH     =  40.0f;
 constexpr float kHelpPanelPadX     = 16.0f;
 constexpr float kHelpPanelPadY     = 12.0f;
 constexpr float kHelpCloseSize     = 18.0f;
