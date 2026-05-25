@@ -94,10 +94,15 @@ struct DocumentState {
     // Latches on drift; stays set until the user resolves via the
     // conflict modal (Reload or Keep-mine). pending_edit_* holds an
     // edit deferred while the modal is up; offset == -1 means none.
+    // pending_undo mirrors that for the Cmd+Z path that found the
+    // externally_modified latch set — we can't pop the undo entry
+    // straight away, but "Keep my edits" needs to know an undo was
+    // queued so it can run it after rebaselining.
     bool          externally_modified = false;
     bool          conflict_modal_open = false;
     int64_t       pending_edit_offset = -1;
     unsigned char pending_edit_value  = 0;
+    bool          pending_undo        = false;
 
     // When >= 0, the next render of the hex grid scrolls so this offset
     // sits ~30% from the top of the body, then clears. Set by Goto/Search

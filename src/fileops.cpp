@@ -125,10 +125,12 @@ bool is_file_held_by_other_process(const char *path)
     return false;
 }
 
-// mtime folded with size so same-second truncations/appends still flip
-// the token. st_mtime is 1-second on macOS; a same-second edit pair with
-// unchanged size collides, but HasExternalModification() is called against
-// bytes we just wrote, so the false-negative is benign.
+// mtime folded with nanoseconds and size so same-second writes still flip
+// the token. st_mtime is 1-second resolution on macOS — without tv_nsec a
+// concurrent editor that writes at the same wall-second with unchanged
+// file size would slip past HasExternalModification() and the user would
+// never see the "File changed on disk" warning. st_mtimespec is the macOS
+// field name for the timespec view of mtime.
 int64_t get_file_mtime_token(const char *path)
 {
     struct stat st;
@@ -136,7 +138,10 @@ int64_t get_file_mtime_token(const char *path)
     // Shift in unsigned space — a large mtime touching the sign bit of a
     // signed int64_t would be UB. The result is just an equality token,
     // so the unsigned->signed reinterpretation at the end is fine.
-    uint64_t mtime = (uint64_t)st.st_mtime;
+    uint64_t mtime = (uint64_t)st.st_mtimespec.tv_sec;
+    uint64_t nsec  = (uint64_t)st.st_mtimespec.tv_nsec;
     uint64_t size  = (uint64_t)st.st_size;
-    return (int64_t)((mtime << 20) ^ size);
+    // Shifts chosen so mtime (~2^31 for the foreseeable future) and nsec
+    // (<= 10^9 ≈ 2^30) don't fully cancel each other; size XORs across.
+    return (int64_t)((mtime << 30) ^ (nsec << 4) ^ size);
 }

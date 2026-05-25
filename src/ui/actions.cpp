@@ -63,6 +63,11 @@ void DoGoto(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     s.MarkInteracted();
     doc.caret_byte            = signed_off;
     doc.pending_scroll_offset = signed_off;
+    // Drop the previous search hit's green highlight — leaving it lit at
+    // the old offset after a manual jump misleads the user into thinking
+    // the match is still there. DoSearch and the search-field edit handler
+    // already reset this; Goto needs the same treatment to stay consistent.
+    doc.last_hit = -1;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "Jumped to 0x%" PRIX64, (uint64_t)off);
     s.SetStatus(buf, GuiState::STATUS_OK);
@@ -96,8 +101,11 @@ void DoSearch(GuiState& s, DocumentState& doc, HexEditorCore& core) {
 
 void DoUndo(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     // External writer may have touched the same offset; restoring old_val
-    // would clobber it. Gate through the conflict modal.
+    // would clobber it. Gate through the conflict modal. pending_undo
+    // tells the "Keep my edits" handler to retry this call after it has
+    // rebaselined — without that flag the Cmd+Z would be silently dropped.
     if (doc.externally_modified) {
+        doc.pending_undo        = true;
         doc.conflict_modal_open = true;
         return;
     }

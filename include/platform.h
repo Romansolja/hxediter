@@ -15,7 +15,11 @@
 
 #include <sys/types.h>
 
-#define UNDO_MAX 64
+// Sized for someone picking through a binary: at 16 bytes per entry the
+// ring is 4 KB per open file, trivial against the ~MB cost of an ImGui
+// context. The 65th-edit-drops-the-first behavior in undo.cpp still
+// applies — the bound is just bigger now.
+#define UNDO_MAX 256
 #define SEARCH_CHUNK 4096
 
 typedef struct {

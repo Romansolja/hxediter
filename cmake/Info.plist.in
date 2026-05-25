@@ -16,5 +16,25 @@
     <key>NSHumanReadableCopyright</key>  <string>@MACOSX_BUNDLE_COPYRIGHT@</string>
     <key>LSMinimumSystemVersion</key>    <string>12.0</string>
     <key>NSHighResolutionCapable</key>   <true/>
+
+    <!-- Register hxediter as a viewer for any file so Finder's "Open With"
+         submenu offers it. LSItemContentTypes=public.data is the
+         catch-all UTI; CFBundleTypeRole=Viewer (not Editor) is honest
+         given that GLFW doesn't surface the Apple Event for
+         kAEOpenDocuments — until that lands, the user still has to drag
+         onto a running instance or pass the path via Terminal. Without
+         this dict, Finder doesn't even list hxediter as a candidate. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>     <string>Any file</string>
+            <key>CFBundleTypeRole</key>     <string>Viewer</string>
+            <key>LSHandlerRank</key>        <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

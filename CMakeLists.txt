@@ -124,6 +124,14 @@ target_link_libraries(hxediter PRIVATE
 
 target_compile_definitions(hxediter PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
+# Bake the source dir into the binary so platform::ResourceDir() can fall
+# back to the in-tree assets/ when the binary is run outside a .app
+# bundle (debugger, CI smoke test, build/hxediter directly). Production
+# DMG launches via /Applications/hxediter.app, where mainBundle's
+# resourcePath points at Contents/Resources/ and this fallback is unused.
+target_compile_definitions(hxediter PRIVATE
+    HXEDITER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # MACOSX_BUNDLE_ICON_FILE deliberately omitted until we ship a real
 # hxediter.icns: setting it to a non-existent file makes Console.app
 # log a "couldn't load icon" warning every launch and codesign emits

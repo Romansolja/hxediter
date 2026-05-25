@@ -713,6 +713,7 @@ void RenderHexEditorUI(AppState state,
             if (core_ref.ReloadFromDisk()) {
                 doc.externally_modified  = false;
                 doc.pending_edit_offset  = -1;
+                doc.pending_undo         = false;
                 // File may have shrunk; clamp positions that would now
                 // point past EOF so the status bar and grid don't lie.
                 const int64_t new_size = core_ref.GetFileSize();
@@ -733,7 +734,12 @@ void RenderHexEditorUI(AppState state,
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
         if (ImGui::Button("Keep my edits", ImVec2(140, 0))) {
+            // Rebaseline up-front so the next-frame HasExternalModification
+            // check doesn't immediately re-latch the warning. Without this,
+            // dismissing via Cmd+Z (which sets no pending_edit) would leave
+            // baseline_token_ stale and the badge would re-appear.
             doc.externally_modified = false;
+            core_ref.Rebaseline();
             if (doc.pending_edit_offset >= 0) {
                 auto res = core_ref.EditByte(doc.pending_edit_offset,
                                              doc.pending_edit_value);
@@ -748,12 +754,19 @@ void RenderHexEditorUI(AppState state,
                                 ui::GuiState::STATUS_ERROR);
                 }
                 doc.pending_edit_offset = -1;
+            } else if (doc.pending_undo) {
+                // Replay the Cmd+Z that opened this modal. externally_modified
+                // is already false above, so DoUndo will fall through to the
+                // real undo path instead of bouncing back into this dialog.
+                doc.pending_undo = false;
+                ui::DoUndo(s, doc, core_ref);
             }
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if (ImGui::Button("Cancel", ImVec2(100, 0))) {
             doc.pending_edit_offset = -1;
+            doc.pending_undo        = false;
             ImGui::CloseCurrentPopup();
         }
 

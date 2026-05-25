@@ -216,6 +216,11 @@ bool HexEditorCore::HasExternalModification() const
     return now != baseline_token_;
 }
 
+void HexEditorCore::Rebaseline()
+{
+    baseline_token_ = get_file_mtime_token(state_.filename);
+}
+
 bool HexEditorCore::ReloadFromDisk()
 {
     if (state_.fp == nullptr) return false;

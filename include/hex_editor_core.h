@@ -56,6 +56,12 @@ public:
     // open (or after our last successful edit/reload).
     bool HasExternalModification() const;
 
+    // Resync baseline_token_ with current on-disk state without touching
+    // file bytes or the undo stack. Used by the conflict dialog's "Keep
+    // my edits" path so the next-frame HasExternalModification() check
+    // doesn't immediately re-latch the warning we just dismissed.
+    void Rebaseline();
+
     // Rebaselines and drops pending undo. Used by the conflict dialog's
     // "Reload from disk" path. Returns false if the file handle is bad.
     bool ReloadFromDisk();

@@ -114,7 +114,8 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     const bool    readonly  = core.IsReadOnly();
 
     // Total rows for the whole file. Clipper takes int — clamp at INT_MAX
-    // (covers ~32 GB at 16 BPL; beyond that we'd need a 64-bit clipper).
+    // (~32 GiB at the default 16 BPL, up to ~512 GiB at the dynamic max of
+    // 256 BPL; beyond that we'd need a 64-bit clipper).
     int64_t total_rows64 = (file_size + bpl - 1) / bpl;
     if (total_rows64 < 0) total_rows64 = 0;
     int total_rows = (total_rows64 > (int64_t)INT_MAX)

@@ -10,6 +10,9 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
     // proportional on 4K.
     const float scale = s.font_scale * s.content_scale;
 
+    // Chord prefix reads "Cmd" on macOS, matching the README and Apple's
+    // HIG; ShortcutHeld() also accepts Ctrl for muscle-memory-from-Windows
+    // and Karabiner-style key remappers, but the canonical shortcut is Cmd.
     const char* lines[] = {
         "Quick reference",
         "",
@@ -20,11 +23,14 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         "  Enter                Commit edit",
         "  Esc                  Cancel edit",
         "  PgUp / PgDn          Move caret one screen",
-        "  Ctrl+Z               Undo last edit",
-        "  Ctrl+= / Ctrl+-      Scale font up / down",
-        "  Ctrl+wheel           Scale font (mouse)",
-        "  Ctrl+0               Reset font scale",
-        "  Ctrl+Shift+P         Cycle color palette",
+        "  Cmd+Z                Undo last edit",
+        "  Cmd+= / Cmd+-        Scale font up / down",
+        "  Cmd+scroll           Scale font (mouse / trackpad)",
+        "  Cmd+0                Reset font scale",
+        "  Cmd+Shift+P          Cycle color palette",
+        "  Cmd+Tab / Shift      Next / previous tab",
+        "  Cmd+W                Close current tab",
+        "  Cmd+1 .. Cmd+9       Jump to tab N",
         "  F1                   Toggle this panel",
         "  Goto field           Jump to a hex offset",
         "  Search field         Find a hex byte sequence",
@@ -93,11 +99,9 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover_c);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  act_c);
-    if (visibility <= 0.0f) ImGui::BeginDisabled();
     if (ImGui::Button("##help_close", ImVec2(x_sz, x_sz))) {
         s.show_help = false;
     }
-    if (visibility <= 0.0f) ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
 
     ImVec4 glyph = pal.help_close_glyph; glyph.w *= visibility;
