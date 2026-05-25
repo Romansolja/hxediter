@@ -342,7 +342,8 @@ int main(int argc, char* argv[]) {
             dirs.swap(ctx.pending_directories);
             const std::string& chosen = dirs.back();
             std::vector<std::string> files;
-            ExpandDirectoryInto(PathFromUtf8(chosen), files);
+            DirectoryWalkResult walk =
+                ExpandDirectoryInto(PathFromUtf8(chosen), files);
             ctx.directory_files = std::move(files);
 
             // PathBasename strips trailing slashes; fall back to the
@@ -355,6 +356,31 @@ int main(int argc, char* argv[]) {
                 !ctx.directory_files.empty()) {
                 ctx.state = AppState::HexView;
                 ctx.load_error.clear();
+            }
+
+            // Surface partial-walk outcomes (caps hit or sub-tree errors) so
+            // the user knows the listing isn't exhaustive.
+            if (walk.truncated_by_count || walk.truncated_by_time ||
+                walk.step_errors > 0) {
+                const char* why =
+                    walk.truncated_by_count ? "file cap reached" :
+                    walk.truncated_by_time  ? "time cap reached" :
+                                              "errors during walk";
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              "Directory listing partial (%s); showing %zu file%s",
+                              why,
+                              ctx.directory_files.size(),
+                              ctx.directory_files.size() == 1 ? "" : "s");
+                std::fprintf(stderr, "%s\n", buf);
+                SetExternalStatus(buf, true);
+            } else if (!walk.ok) {
+                char buf[160];
+                std::snprintf(buf, sizeof(buf),
+                              "Could not open folder: %s",
+                              chosen.c_str());
+                std::fprintf(stderr, "%s\n", buf);
+                SetExternalStatus(buf, true);
             }
         }
 

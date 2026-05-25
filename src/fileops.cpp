@@ -30,7 +30,11 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
     unsigned char chunk[SEARCH_CHUNK];
     int64_t pos;
 
-    if (pattern_len <= 0 || start < 0 || start + pattern_len > file_size)
+    // Reject before adding into start — at INT64_MAX-adjacent starts the
+    // sum would overflow. Subtracting from file_size stays in-range as
+    // long as start <= file_size, which we guard first.
+    if (pattern_len <= 0 || start < 0 || start > file_size ||
+        (int64_t)pattern_len > file_size - start)
         return -1;
 
     pos = start;
@@ -129,7 +133,10 @@ int64_t get_file_mtime_token(const char *path)
 {
     struct stat st;
     if (stat(path, &st) != 0) return -1;
-    int64_t mtime = (int64_t)st.st_mtime;
-    int64_t size  = (int64_t)st.st_size;
-    return (mtime << 20) ^ size;
+    // Shift in unsigned space — a large mtime touching the sign bit of a
+    // signed int64_t would be UB. The result is just an equality token,
+    // so the unsigned->signed reinterpretation at the end is fine.
+    uint64_t mtime = (uint64_t)st.st_mtime;
+    uint64_t size  = (uint64_t)st.st_size;
+    return (int64_t)((mtime << 20) ^ size);
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -18,13 +19,28 @@ inline std::string PathToUtf8(const std::filesystem::path& p) {
     return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
 }
 
+// Outcome of ExpandDirectoryInto. Caller can surface a "listing partial"
+// message when any of the truncation flags or step_errors is set.
+struct DirectoryWalkResult {
+    bool   ok                 = true;   // false iff the root couldn't be opened
+    bool   truncated_by_count = false;  // hit the file-count cap
+    bool   truncated_by_time  = false;  // hit the wall-time cap
+    size_t step_errors        = 0;      // per-entry increment failures we skipped over
+};
+
 // Walks `root` recursively, appending regular files (UTF-8) to `out` in
 // alphabetical order. Permission errors skipped via skip_permission_denied;
 // all errors absorbed via std::error_code, so this is safe from C callback
 // hooks (e.g. GLFW drop) where a thrown exception would propagate through
 // the event loop and abort the process.
-void ExpandDirectoryInto(const std::filesystem::path& root,
-                         std::vector<std::string>& out);
+//
+// Runs on the UI thread, so the walk is bounded by both a file-count cap
+// and a wall-time deadline — a careless drop of a deep mounted tree won't
+// freeze the editor. On a per-entry increment failure (e.g. a sub-tree
+// disappeared mid-walk) the walk skips past the offending subdirectory
+// rather than aborting the whole listing.
+DirectoryWalkResult ExpandDirectoryInto(const std::filesystem::path& root,
+                                        std::vector<std::string>& out);
 
 // Returns the last path component of a UTF-8 path. Trailing slashes are
 // trimmed first, so "/foo/bar/" yields "bar". Returns "" for inputs that
