@@ -15,10 +15,7 @@
 
 #include <sys/types.h>
 
-// Sized for someone picking through a binary: at 16 bytes per entry the
-// ring is 4 KB per open file, trivial against the ~MB cost of an ImGui
-// context. The 65th-edit-drops-the-first behavior in undo.cpp still
-// applies — the bound is just bigger now.
+// 256 entries × 16 bytes = 4 KB per open file. Ring overwrites oldest when full.
 #define UNDO_MAX 256
 #define SEARCH_CHUNK 4096
 

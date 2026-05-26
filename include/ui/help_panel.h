@@ -7,4 +7,4 @@ namespace ui {
 
 void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility);
 
-} // namespace ui
+}

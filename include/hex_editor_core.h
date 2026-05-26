@@ -31,39 +31,31 @@ public:
     HexEditorCore(const HexEditorCore&) = delete;
     HexEditorCore& operator=(const HexEditorCore&) = delete;
 
-    // Reads up to `count` bytes starting at `offset` (clamped to EOF).
-    // Returns the bytes read; empty on seek/read failure. Render loop pulls
-    // only visible rows each frame, so the file is never resident in RAM.
+    // Up to `count` bytes from `offset` (clamped to EOF). Empty on failure.
+    // The file is never resident in RAM — only visible rows are pulled per frame.
     std::vector<unsigned char> ReadAt(int64_t offset, size_t count) const;
 
     std::optional<EditResult> EditByte(int64_t offset, unsigned char new_val);
     std::optional<UndoResult> Undo();
 
-    // Wraps around to the beginning if not found searching forward from
-    // the given start offset.
+    // Wraps to the beginning if no forward match.
     std::optional<SearchResult> Search(const std::vector<unsigned char>& pattern,
                                         int64_t start_offset);
 
     int64_t     GetFileSize() const;
     std::string GetFilename() const;
     bool        IsReadOnly() const;
-    // One-way latch: flips is_readonly on regardless of filesystem
-    // permissions. Used by the "open as read-only" setting.
+    // One-way latch — flips is_readonly on regardless of filesystem permissions.
     void        ForceReadOnly();
     int         GetUndoCount() const;
 
-    // True if the file on disk differs from the baseline captured at
-    // open (or after our last successful edit/reload).
+    // True if the file on disk differs from the baseline at open or last write.
     bool HasExternalModification() const;
 
-    // Resync baseline_token_ with current on-disk state without touching
-    // file bytes or the undo stack. Used by the conflict dialog's "Keep
-    // my edits" path so the next-frame HasExternalModification() check
-    // doesn't immediately re-latch the warning we just dismissed.
+    // Resync baseline_token_ with disk without touching bytes or undo.
     void Rebaseline();
 
-    // Rebaselines and drops pending undo. Used by the conflict dialog's
-    // "Reload from disk" path. Returns false if the file handle is bad.
+    // Rebaseline + drop pending undo. False if the file handle is bad.
     bool ReloadFromDisk();
 
 private:

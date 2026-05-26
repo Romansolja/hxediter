@@ -33,8 +33,7 @@ namespace {
 
 ui::GuiState g_state;
 
-// Trailing-slash or empty paths have no basename; fall back rather than
-// passing "" to ImGui (BeginTabItem with an empty label is undefined).
+// ImGui BeginTabItem with an empty label is UB — fall back to a placeholder.
 std::string TabLabelBase(const std::string& path) {
     std::string base = PathBasename(path);
     if (base.empty()) return "(unnamed)";
@@ -59,8 +58,7 @@ void AdjustFontScale(ui::GuiState& s, float delta) {
     s.SetStatus(buf, ui::GuiState::STATUS_INFO);
 }
 
-// Tab-navigation and tab-close shortcuts: run unconditionally (Ctrl is
-// held, so no accidental clash with typing in goto/search).
+// Unconditional: the Cmd/Ctrl gate prevents clash with typing in goto/search.
 void HandleTabShortcuts(std::vector<OpenDocument>& docs,
                         int* active_doc,
                         std::vector<int>* out_close_indices) {
@@ -68,7 +66,6 @@ void HandleTabShortcuts(std::vector<OpenDocument>& docs,
     const int n = (int)docs.size();
     if (n <= 0) return;
 
-    // Policy lives in ui::ShortcutHeld — see include/ui/shortcuts.h.
     // IsKeyPressed defaults to repeat=true so Cmd-hold-Tab still cycles.
     const bool shortcut = ui::ShortcutHeld(io);
 
@@ -100,7 +97,7 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
                      float body_height_px) {
     ImGuiIO& io = ImGui::GetIO();
 
-    // F1 must work even when a text field is focused.
+    // F1 must work even when a text field is focused — handled before the WantTextInput gate.
     if (ImGui::IsKeyPressed(ImGuiKey_F1)) s.show_help = !s.show_help;
 
     if (s.show_help &&
@@ -110,8 +107,7 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
         s.show_help = false;
     }
 
-    // Cmd/Ctrl+wheel zoom runs before the WantTextInput gate — a mouse
-    // gesture shouldn't be swallowed just because a field has focus.
+    // Wheel zoom before the WantTextInput gate — mouse gestures shouldn't be eaten by focus.
     const bool shortcut = ui::ShortcutHeld(io);
     if (shortcut && io.MouseWheel != 0.0f) {
         AdjustFontScale(s, (io.MouseWheel > 0.0f ? +1.0f : -1.0f)
@@ -121,7 +117,6 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
 
     if (io.WantTextInput) return;
 
-    // Re-bind locally so the chord-checks below read uniformly.
     const bool ctrl  = shortcut;
     const bool shift = io.KeyShift;
 
@@ -144,10 +139,8 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
         CyclePalette(s);
     }
 
-    // Gated on !io.NavVisible so Tab-focused buttons don't eat the same
-    // arrow press and cause a double-move. The selected_byte gate also
-    // suppresses PgUp/PgDn while an inline byte edit is open — at that
-    // point you're typing two hex digits, not navigating.
+    // !NavVisible: avoid double-move from Tab-focused buttons. selected_byte gate: don't
+    // navigate while an inline byte edit is open (user is typing two hex digits).
     if (doc.selected_byte < 0 && !io.NavVisible) {
         const int64_t size = core.GetFileSize();
         const int64_t bpl  = (layout.bytes_per_line > 0) ? layout.bytes_per_line
@@ -197,11 +190,8 @@ void HandleShortcuts(ui::GuiState& s, ui::DocumentState& doc,
     }
 }
 
-// Replaces ImGui's built-in TabListPopupButton, whose sideways triangle
-// was unrecognizable as a directory expander. Draws a folder-tree glyph
-// (with a chevron when available) and opens a popup listing the loaded
-// directory's files plus the currently-open tabs. Caller adds horizontal
-// space after so the first tab doesn't sit flush.
+// Replaces ImGui's TabListPopupButton (sideways triangle reads as illegible).
+// Lists the loaded directory's files plus the currently-open tabs.
 bool RenderTabDirDropdown(ui::GuiState& s,
                           std::vector<OpenDocument>& docs,
                           int* active_doc,
@@ -241,7 +231,7 @@ bool RenderTabDirDropdown(ui::GuiState& s,
         dl->AddText(cp, glyph, ICON_FA_CHEVRON_DOWN);
         ImGui::PopFont();
     } else {
-        // Fallback: draw a small "≡▾" by hand so the button still reads.
+        // Fallback glyph when icon font is missing.
         const float cx = pos.x + size * 0.5f;
         const float cy = pos.y + size * 0.5f;
         const float r  = size * 0.22f;
@@ -273,10 +263,7 @@ bool RenderTabDirDropdown(ui::GuiState& s,
         if (have_dir) {
             ImGui::TextDisabled("Files in %s", directory_label->c_str());
             ImGui::Separator();
-            // Disambiguate identical basenames from different subdirectories
-            // (e.g. every package's __init__.py) — ImGui derives the widget
-            // ID from the visible label, so duplicates trigger an
-            // ID-conflict assertion.
+            // ##suffix disambiguates duplicate basenames — same label triggers ImGui ID conflict.
             for (int i = 0; i < (int)directory_files->size(); ++i) {
                 const std::string& path = (*directory_files)[i];
                 std::string base = TabLabelBase(path);
@@ -345,17 +332,12 @@ void RenderTabBar(ui::GuiState& s,
                   bool* out_clear_directory) {
     const int n = (int)docs.size();
 
-    // Custom directory dropdown button — replaces the built-in
-    // ImGuiTabBarFlags_TabListPopupButton (unrecognizable sideways triangle).
     RenderTabDirDropdown(s, docs, active_doc, directory_files, directory_label,
                          out_pending_paths, out_clear_directory);
 
-    // Visual breathing room between the button and the first tab.
     ImGui::SameLine(0.0f, 10.0f);
 
     if (n <= 0) {
-        // Render a disabled hint where the tabs would be so the user
-        // understands what's expected of them.
         ImGui::AlignTextToFramePadding();
         if (directory_files && !directory_files->empty()) {
             ImGui::TextDisabled("Pick a file from the folder \xE2\x86\x92");
@@ -365,9 +347,8 @@ void RenderTabBar(ui::GuiState& s,
         return;
     }
 
-    // Only force selection on the frame after a programmatic change
-    // (Ctrl+Tab, Ctrl+N, tab close). Applying SetSelected every frame for
-    // the current tab would override user clicks on other tabs.
+    // Force selection only on the frame after a programmatic change (Ctrl+Tab, tab close) —
+    // every-frame SetSelected would override user clicks.
     const int programmatic_target =
         (*active_doc != s.last_tab_active_seen) ? *active_doc : -1;
 
@@ -376,10 +357,7 @@ void RenderTabBar(ui::GuiState& s,
         ImGuiTabBarFlags_AutoSelectNewTabs |
         ImGuiTabBarFlags_FittingPolicyScroll;
 
-    // Local tab styling — ImGui's defaults render selected/unselected tabs
-    // as near-identical dark blues. Selected gets a lighter blue tint plus
-    // a JetBrains-style top overline; unselected sinks darker than the
-    // surrounding chrome. Dimmed variants are muted versions of the same.
+    // ImGui's default selected/unselected tabs are near-identical — push a contrast palette.
     const auto& pal_tab = ui::theme::Active(s.palette);
     const ImVec4 tab_unsel    (pal_tab.btn_secondary.x * 0.55f,
                                pal_tab.btn_secondary.y * 0.55f,
@@ -397,7 +375,6 @@ void RenderTabBar(ui::GuiState& s,
     ImGui::PushStyleColor(ImGuiCol_TabSelectedOverline,  tab_overline);
     ImGui::PushStyleColor(ImGuiCol_TabDimmed,            tab_unsel);
     ImGui::PushStyleColor(ImGuiCol_TabDimmedSelected,    tab_dim_sel);
-    // Slight extra rounding pulls the look closer to JetBrains/VS Code.
     ImGui::PushStyleVar  (ImGuiStyleVar_TabRounding,     5.0f);
 
     if (!ImGui::BeginTabBar("##docs", tab_flags)) {
@@ -415,9 +392,7 @@ void RenderTabBar(ui::GuiState& s,
         char label[260];
         std::snprintf(label, sizeof(label), "%s##tab%d", base.c_str(), i);
 
-        // No ImGuiTabItemFlags_UnsavedDocument: edits are written to disk
-        // immediately, so there is never an "unsaved" state in this app.
-        // GetUndoCount() means "has-pending-undo" — different concept.
+        // No UnsavedDocument flag: edits write straight to disk — undo count is not "unsaved".
         ImGuiTabItemFlags item_flags = 0;
         if (i == programmatic_target) {
             item_flags |= ImGuiTabItemFlags_SetSelected;
@@ -429,7 +404,6 @@ void RenderTabBar(ui::GuiState& s,
             ImGui::SetTooltip("%s", filename.c_str());
         }
         if (visible) {
-            // Whichever tab ImGui shows as selected this frame wins.
             *active_doc = i;
             ImGui::EndTabItem();
         }
@@ -445,7 +419,7 @@ void RenderTabBar(ui::GuiState& s,
     s.last_tab_active_seen = *active_doc;
 }
 
-} // anonymous namespace
+}
 
 void SetEditorFonts(ImFont* ui_font, ImFont* mono_font,
                     ImFont* title_font, ImFont* icon_font,
@@ -500,10 +474,8 @@ void RenderHexEditorUI(AppState state,
                        std::vector<std::string>* out_pending_directories) {
     auto& s = g_state;
 
-    // Two independent zoom axes: chrome (toolbar/tab bar/status bar/start
-    // screen) scales via the main window's SetWindowFontScale below; the
-    // hex grid scales via per-child SetWindowFontScale on ##hexheader /
-    // ##hexview. Keep FontGlobalScale at 1.0 — both axes are per-window.
+    // Two independent zoom axes — chrome on the main window, hex grid on its children — both
+    // applied per-window via SetWindowFontScale. FontGlobalScale stays 1.0.
     ImGui::GetIO().FontGlobalScale = 1.0f;
 
     float dt = ImGui::GetIO().DeltaTime;
@@ -524,13 +496,9 @@ void RenderHexEditorUI(AppState state,
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    // Fixed window id so ImGui doesn't restyle the container whenever the
-    // active file name changes.
+    // Fixed window id — otherwise ImGui restyles when the active filename changes.
     ImGui::Begin("##hxediter_main", nullptr, flags);
 
-    // Chrome zoom for everything that renders directly in this window —
-    // toolbar, tab bar, status bar, and start screen. The hex header/body
-    // children override locally via their own SetWindowFontScale.
     ImGui::SetWindowFontScale(s.chrome_scale);
 
     const auto& pal = ui::theme::Active(s.palette);
@@ -544,10 +512,8 @@ void RenderHexEditorUI(AppState state,
         return;
     }
 
-    // HexView is valid with an empty docs list as long as a folder is
-    // loaded — the user picks a file from the dropdown. Tab bar still
-    // renders (dropdown button + "pick a file" hint) and the hex grid is
-    // replaced with an empty-state prompt.
+    // HexView is valid with empty docs as long as a folder is loaded — tab bar still renders
+    // the dropdown + a "pick a file" hint, body shows an empty-state prompt.
     if (!docs) {
         ui::theme::PopEditorStyle();
         ImGui::End();
@@ -575,9 +541,7 @@ void RenderHexEditorUI(AppState state,
     }
 
     if (docs->empty()) {
-        // Folder loaded but nothing to show in the body. Match the start
-        // screen's centered-prompt aesthetic but keep the toolbar/tab
-        // dropdown above so the user can pick a file.
+        // Folder loaded, nothing open — render a centered prompt below the tab bar.
         ImGui::Separator();
         ImVec2 avail = ImGui::GetContentRegionAvail();
         ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -639,24 +603,16 @@ void RenderHexEditorUI(AppState state,
     ImGui::Separator();
 
     if (s.mono_font) ImGui::PushFont(s.mono_font);
-    // ComputeHexLayout's CalcTextSize calls inherit the current window's
-    // font scale, and the function is documented to assume that scale is
-    // 1.0 (it then multiplies by the `scale` arg itself). The main window
-    // is currently at chrome_scale for the toolbar/tab bar — restore 1.0
-    // for the layout calc so column widths match what the hex children
-    // render at (s.font_scale), then put chrome_scale back so the status
-    // bar reservation below (GetFrameHeightWithSpacing) and the status
-    // bar render itself stay in chrome scale.
+    // ComputeHexLayout's CalcTextSize assumes window scale == 1.0 (it multiplies internally).
+    // Restore 1.0 for the layout calc, then restore chrome_scale for the status-bar reservation.
     ImGui::SetWindowFontScale(1.0f);
     ui::HexLayout layout =
         ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x, s.font_scale);
     ImGui::SetWindowFontScale(s.chrome_scale);
 
-    // Zero WindowPadding so header and body share window.Pos.x — the
-    // SameLine(absolute_x) calls in both would otherwise land on different
-    // pixels and the byte columns would drift out from under the header
-    // labels. SetWindowFontScale is per-window, so it must live between
-    // BeginChild and the renderer.
+    // Zero WindowPadding so header and body share window.Pos.x — otherwise byte columns
+    // drift out from under the header labels. SetWindowFontScale must sit between BeginChild
+    // and the renderer (per-window).
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 4));
     ImGui::BeginChild("##hexheader",
                       ImVec2(0, 0),
@@ -674,8 +630,7 @@ void RenderHexEditorUI(AppState state,
                       ImGuiWindowFlags_None);
     ImGui::SetWindowFontScale(s.font_scale);
     ImGui::PopStyleVar();
-    // Captured for HandleShortcuts so PgUp/PgDn moves by exactly one
-    // screenful regardless of font scale or window size.
+    // For HandleShortcuts: PgUp/PgDn moves exactly one screenful.
     const float hex_body_height = ImGui::GetWindowHeight();
     ui::RenderHexGrid(s, doc, pal, core_ref, layout);
     ImGui::EndChild();
@@ -714,8 +669,7 @@ void RenderHexEditorUI(AppState state,
                 doc.externally_modified  = false;
                 doc.pending_edit_offset  = -1;
                 doc.pending_undo         = false;
-                // File may have shrunk; clamp positions that would now
-                // point past EOF so the status bar and grid don't lie.
+                // File may have shrunk — clamp positions past EOF.
                 const int64_t new_size = core_ref.GetFileSize();
                 if (new_size <= 0) {
                     doc.caret_byte = -1;
@@ -734,10 +688,8 @@ void RenderHexEditorUI(AppState state,
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
         if (ImGui::Button("Keep my edits", ImVec2(140, 0))) {
-            // Rebaseline up-front so the next-frame HasExternalModification
-            // check doesn't immediately re-latch the warning. Without this,
-            // dismissing via Cmd+Z (which sets no pending_edit) would leave
-            // baseline_token_ stale and the badge would re-appear.
+            // Rebaseline up-front — otherwise the next-frame HasExternalModification re-latches
+            // the warning (Cmd+Z path sets no pending_edit, so it'd leave baseline stale).
             doc.externally_modified = false;
             core_ref.Rebaseline();
             if (doc.pending_edit_offset >= 0) {
@@ -755,9 +707,8 @@ void RenderHexEditorUI(AppState state,
                 }
                 doc.pending_edit_offset = -1;
             } else if (doc.pending_undo) {
-                // Replay the Cmd+Z that opened this modal. externally_modified
-                // is already false above, so DoUndo will fall through to the
-                // real undo path instead of bouncing back into this dialog.
+                // Replay the Cmd+Z that opened this modal — externally_modified is now false
+                // so DoUndo runs through, not back into this dialog.
                 doc.pending_undo = false;
                 ui::DoUndo(s, doc, core_ref);
             }

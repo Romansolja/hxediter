@@ -4,14 +4,10 @@
 
 namespace ui {
 
-// Load persisted user preferences (sliders, palette, toggles) from
-// platform::AppSupportDir()+"prefs.txt" and write them onto `s`. Missing
-// file or missing keys leave the corresponding field at its compiled-in
-// default — no error. Out-of-range values are clamped.
+// Apply prefs.txt onto s. Missing file/keys → defaults; out-of-range values clamped.
 void LoadPreferences(GuiState& s);
 
-// Write the current values of persisted fields to disk. Safe to call from
-// the shutdown path; failures are logged to stderr and otherwise ignored.
+// Snapshot s to disk. Failures logged to stderr; never throws.
 void SavePreferences(const GuiState& s);
 
-} // namespace ui
+}

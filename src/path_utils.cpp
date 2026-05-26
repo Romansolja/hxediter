@@ -9,8 +9,7 @@ DirectoryWalkResult ExpandDirectoryInto(const std::filesystem::path& root,
                                         std::vector<std::string>& out) {
     DirectoryWalkResult result;
 
-    // Hard ceilings. The walk runs on the UI thread; without these, dropping
-    // ~/Library or a deep network mount would freeze the editor.
+    // Hard ceilings — walk runs on the UI thread; ~/Library or a deep network mount would freeze it.
     constexpr size_t kMaxFiles = 50000;
     constexpr auto   kMaxWalk  = std::chrono::milliseconds(500);
 
@@ -36,9 +35,7 @@ DirectoryWalkResult ExpandDirectoryInto(const std::filesystem::path& root,
             result.truncated_by_count = true;
             break;
         }
-        // clock_gettime is cheap but not free; sampling every 1024 entries
-        // keeps the deadline tight (~few ms slack at typical 100k entries/s)
-        // without per-entry overhead.
+        // Sample clock every 1024 entries: keeps deadline tight without per-entry overhead.
         if ((++since_clock_check & 0x3FF) == 0 &&
             std::chrono::steady_clock::now() > deadline) {
             result.truncated_by_time = true;
@@ -60,10 +57,7 @@ DirectoryWalkResult ExpandDirectoryInto(const std::filesystem::path& root,
                              step_ec.message().c_str());
                 logged_step_error = true;
             }
-            // Abandon the current subdirectory and resume at its parent;
-            // a single permission glitch or vanished subtree shouldn't kill
-            // the rest of the listing. If pop also fails we're out of
-            // recovery moves and stop cleanly.
+            // Resume at parent — one bad subtree shouldn't kill the listing. If pop fails, stop.
             std::error_code pop_ec;
             it.pop(pop_ec);
             if (pop_ec) break;

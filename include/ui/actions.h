@@ -16,4 +16,4 @@ void DoSearch  (GuiState& s, DocumentState& doc, HexEditorCore& core);
 void DoUndo    (GuiState& s, DocumentState& doc, HexEditorCore& core);
 void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core);
 
-} // namespace ui
+}

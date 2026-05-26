@@ -6,13 +6,9 @@
 namespace ui {
 
 void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
-    // Combined font zoom + HiDPI multiplier so pixel constants stay
-    // proportional on 4K.
+    // font zoom × HiDPI — pixel constants stay proportional on 4K.
     const float scale = s.font_scale * s.content_scale;
 
-    // Chord prefix reads "Cmd" on macOS, matching the README and Apple's
-    // HIG; ShortcutHeld() also accepts Ctrl for muscle-memory-from-Windows
-    // and Karabiner-style key remappers, but the canonical shortcut is Cmd.
     const char* lines[] = {
         "Quick reference",
         "",
@@ -45,14 +41,11 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
 
     if (shown_h < 20.0f) return;
 
-    // Center in the hex view's visible rect (screen-space) so the panel
-    // stays put as rows fill the page or the user scrolls.
+    // Center in screen-space so the panel stays put while the user scrolls.
     const ImVec2 win_pos  = ImGui::GetWindowPos();
     const ImVec2 win_size = ImGui::GetWindowSize();
     const float  margin   = 16.0f * scale;
-    // Shrink to fit instead of vanishing when HiDPI + 100% font scale
-    // pushes the natural panel past the hex view child's bounds. The line
-    // loop below already drops rows that fall past the clamped bottom.
+    // Shrink rather than vanish when HiDPI pushes natural size past the child bounds.
     if (panel_w > win_size.x - margin) panel_w = win_size.x - margin;
     if (shown_h > win_size.y - margin) shown_h = win_size.y - margin;
     if (panel_w < layout::kHelpPanelMinW * scale ||
@@ -82,10 +75,8 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
     dl->AddRect      (p0, p1, ImGui::GetColorU32(bd),
                       layout::kHelpPanelRounding, 0, 1.5f);
 
-    // Absorb clicks anywhere on the panel so they neither dismiss the
-    // overlay (HandleShortcuts' !IsAnyItemHovered() rule) nor fall through
-    // to the byte selectables underneath. AllowOverlap so the close button
-    // drawn next still wins in its top-right corner.
+    // Absorb clicks: don't dismiss the overlay and don't fall through to byte selectables.
+    // AllowOverlap so the close button drawn next still wins in its corner.
     ImGui::SetCursorScreenPos(p0);
     ImGui::SetNextItemAllowOverlap();
     ImGui::InvisibleButton("##help_blocker", ImVec2(panel_w, shown_h));
@@ -132,8 +123,7 @@ void RenderHelpPanel(GuiState& s, const theme::Palette& pal, float visibility) {
         }
     }
 
-    // Restore cursor so subsequent widgets don't lay out from inside the panel.
     ImGui::SetCursorScreenPos(saved_cursor);
 }
 
-} // namespace ui
+}

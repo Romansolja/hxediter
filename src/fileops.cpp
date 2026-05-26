@@ -30,9 +30,7 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
     unsigned char chunk[SEARCH_CHUNK];
     int64_t pos;
 
-    // Reject before adding into start — at INT64_MAX-adjacent starts the
-    // sum would overflow. Subtracting from file_size stays in-range as
-    // long as start <= file_size, which we guard first.
+    // Subtract from file_size (not add to start) — INT64_MAX-adjacent starts would overflow.
     if (pattern_len <= 0 || start < 0 || start > file_size ||
         (int64_t)pattern_len > file_size - start)
         return -1;
@@ -72,8 +70,7 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
     return -1;
 }
 
-// fflush surfaces deferred write errors here, not later as a confusing
-// seek failure.
+// fflush surfaces deferred write errors here, not later as a confusing seek failure.
 int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 {
     if (fseeko(fp, offset, SEEK_SET) != 0) return -1;
@@ -82,8 +79,6 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
     return 0;
 }
 
-// Long-lived core handle stays read-only so external tools can still
-// open for write; each edit uses a transient write handle.
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 {
     FILE *wf = open_file_shared(path, "rb+");
@@ -93,12 +88,6 @@ int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
     return rc;
 }
 
-// Atomic read-then-write under a single FILE*. The previous two-handle
-// path (read on long-lived handle, then open separate write handle)
-// could let a concurrent external writer mutate the byte between read
-// and write, leaving undo with a stale old_val. Running seek/read/seek/
-// write on one rb+ FILE* closes the window to sub-microsecond. No OS
-// advisory lock — concurrent external writers are deliberately allowed.
 int replace_byte_at_path(const char *path, int64_t offset,
                          unsigned char new_val, unsigned char *out_old_val)
 {
@@ -118,30 +107,21 @@ int replace_byte_at_path(const char *path, int64_t offset,
     return 0;
 }
 
-// POSIX has no OS-enforced sharing mode at open time. Always returns false.
 bool is_file_held_by_other_process(const char *path)
 {
     (void)path;
     return false;
 }
 
-// mtime folded with nanoseconds and size so same-second writes still flip
-// the token. st_mtime is 1-second resolution on macOS — without tv_nsec a
-// concurrent editor that writes at the same wall-second with unchanged
-// file size would slip past HasExternalModification() and the user would
-// never see the "File changed on disk" warning. st_mtimespec is the macOS
-// field name for the timespec view of mtime.
+// Folds mtime + nsec + size: macOS st_mtime is 1s resolution, so without nsec a same-second
+// external writer with unchanged size would slip past HasExternalModification().
 int64_t get_file_mtime_token(const char *path)
 {
     struct stat st;
     if (stat(path, &st) != 0) return -1;
-    // Shift in unsigned space — a large mtime touching the sign bit of a
-    // signed int64_t would be UB. The result is just an equality token,
-    // so the unsigned->signed reinterpretation at the end is fine.
+    // Unsigned shifts: signed shift past the sign bit is UB.
     uint64_t mtime = (uint64_t)st.st_mtimespec.tv_sec;
     uint64_t nsec  = (uint64_t)st.st_mtimespec.tv_nsec;
     uint64_t size  = (uint64_t)st.st_size;
-    // Shifts chosen so mtime (~2^31 for the foreseeable future) and nsec
-    // (<= 10^9 ≈ 2^30) don't fully cancel each other; size XORs across.
     return (int64_t)((mtime << 30) ^ (nsec << 4) ^ size);
 }

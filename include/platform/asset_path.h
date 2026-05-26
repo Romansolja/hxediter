@@ -4,17 +4,12 @@
 
 namespace platform {
 
-// Prefix (with trailing slash) for read-only asset paths.
-// Resolves to "[[NSBundle mainBundle] resourcePath]/" — points inside
-// the .app at runtime, so a bundle launched from /Applications can still
-// find its fonts. Cached in a static local on first call.
+// Read-only asset prefix (with trailing slash). Resolves to the .app's resourcePath at runtime.
 const std::string& ResourceDir();
 
-// Writable per-user directory (with trailing slash) for app state like
-// imgui.ini. Created if it doesn't exist.
-// Resolves to "~/Library/Application Support/hxediter/". Without this,
-// ImGui's default cwd-relative "imgui.ini" silently fails to save when
-// the app is launched from /Applications (cwd = /).
+// Writable per-user dir (with trailing slash). Created if missing.
+// macOS: "~/Library/Application Support/hxediter/" — overrides ImGui's cwd-relative default,
+// which silently fails to save when launched from /Applications (cwd = /).
 const std::string& AppSupportDir();
 
-} // namespace platform
+}

@@ -1,7 +1,4 @@
-// Apple impls of platform::ResourceDir() and platform::AppSupportDir().
-// Both return references to static locals so callers can take a stable
-// .c_str() (io.IniFilename in main.cpp expects a program-lifetime const
-// char*). NSBundle / NSFileManager are thread-safe for these patterns.
+// Both return refs to static locals so callers can take a program-lifetime .c_str().
 
 #ifdef __APPLE__
 
@@ -21,13 +18,8 @@ const std::string& ResourceDir() {
                 ? std::string([ns_path UTF8String]) + "/"
                 : std::string();
 
-            // Inside a .app bundle, resourcePath ends in /Contents/Resources/.
-            // A loose executable (debugger, `build/hxediter` directly, CI
-            // smoke test) gets the directory of the executable instead —
-            // which doesn't contain assets/ — so the bundle would silently
-            // ship the ImGui default font and look broken to a developer.
-            // Detect that case, log it, and fall back to the source-tree
-            // assets directory baked at configure time.
+            // In a .app, resourcePath ends in /Contents/Resources/. A loose binary (debugger, CI)
+            // gets exe-dir, which has no assets — fall back to the source-tree path baked at configure.
             const std::string suffix = "/Contents/Resources/";
             const bool in_bundle =
                 path.size() >= suffix.size() &&
@@ -57,21 +49,12 @@ const std::string& ResourceDir() {
 const std::string& AppSupportDir() {
     static const std::string cached = [] {
         @autoreleasepool {
-            // Unsandboxed flow — NSHomeDirectory() gives the user's real
-            // $HOME. If this binary is ever sandboxed (e.g. for the Mac
-            // App Store) switch to NSSearchPathForDirectoriesInDomains(
-            // NSApplicationSupportDirectory, NSUserDomainMask, YES), which
-            // resolves correctly under both runtimes.
+            // Unsandboxed: NSHomeDirectory gives the real $HOME. Under a sandbox, switch to
+            // NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).
             NSString* path = [NSString stringWithFormat:
                 @"%@/Library/Application Support/hxediter",
                 NSHomeDirectory()];
 
-            // Return empty on creation failure so callers fall through to
-            // their no-prefs behavior instead of writing into a path that
-            // doesn't exist (which would log a second cryptic error on
-            // every save). preferences.cpp:19 and main.cpp:224 both gate
-            // on empty already — this finally makes those checks load-
-            // bearing.
             NSError* err = nil;
             BOOL ok = [[NSFileManager defaultManager]
                 createDirectoryAtPath:path
@@ -93,6 +76,6 @@ const std::string& AppSupportDir() {
     return cached;
 }
 
-} // namespace platform
+}
 
-#endif // __APPLE__
+#endif

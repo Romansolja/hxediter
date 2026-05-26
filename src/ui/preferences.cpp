@@ -26,9 +26,7 @@ float ClampScale(float v) {
     return v;
 }
 
-// Trim ASCII whitespace from both ends in place. Config values frequently
-// arrive with trailing CR (\r\n line endings) or surrounding spaces from a
-// hand-edited file; without trimming, atoi/atof would reject them.
+// Trim whitespace — atoi/atof reject values with trailing CR or surrounding spaces.
 void Trim(std::string& s) {
     size_t b = 0;
     while (b < s.size() &&
@@ -44,14 +42,14 @@ bool ParseBool(const std::string& v) {
     return (v == "1" || v == "true" || v == "True" || v == "TRUE");
 }
 
-} // namespace
+}
 
 void LoadPreferences(GuiState& s) {
     const std::string path = PrefsPath();
     if (path.empty()) return;
 
     std::ifstream in(path);
-    if (!in) return;  // No file yet — first launch. Defaults stand.
+    if (!in) return;  // First launch — defaults stand.
 
     std::string line;
     while (std::getline(in, line)) {
@@ -81,8 +79,7 @@ void LoadPreferences(GuiState& s) {
         } else if (key == "background_throttle") {
             s.background_throttle = ParseBool(val);
         }
-        // Unknown keys are tolerated — future versions may add fields and
-        // we don't want an old binary to throw away the user's settings.
+        // Unknown keys tolerated — older binary shouldn't drop newer fields.
     }
 }
 
@@ -90,8 +87,7 @@ void SavePreferences(const GuiState& s) {
     const std::string path = PrefsPath();
     if (path.empty()) return;
 
-    // Write to a temp file then rename, so a mid-write crash can't leave
-    // a half-truncated prefs file. POSIX rename is atomic on the same FS.
+    // Temp-then-rename: POSIX rename is atomic on the same FS, so a mid-write crash can't truncate.
     const std::string tmp = path + ".tmp";
     {
         std::ofstream out(tmp, std::ios::trunc);
@@ -119,4 +115,4 @@ void SavePreferences(const GuiState& s) {
     }
 }
 
-} // namespace ui
+}

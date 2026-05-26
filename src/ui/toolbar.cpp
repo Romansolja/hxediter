@@ -12,8 +12,6 @@ namespace ui {
 
 void RenderToolbar(GuiState& s, DocumentState& doc,
                    const theme::Palette& pal, HexEditorCore& core) {
-    // Layout pixel constants follow chrome_scale so spacing tracks the
-    // font scale applied by the main window's SetWindowFontScale.
     const float cs        = s.chrome_scale;
     const float group_gap = layout::kToolbarGroupGap * cs;
     const ImGuiStyle& style = ImGui::GetStyle();
@@ -34,9 +32,7 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
 
     ImGui::AlignTextToFramePadding();
 
-    // Responsive pass: measure every element, then decide field widths
-    // and which low-priority elements to drop, so the toolbar doesn't run
-    // under the right-anchored settings gear.
+    // Responsive pass: measure, then shrink fields and drop low-priority elements until it fits.
     auto textw = [](const char* t) { return ImGui::CalcTextSize(t).x; };
 
     const float w_jump_label = textw("JUMP");
@@ -88,7 +84,6 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
         goto_w   = std::max(goto_min,   goto_w   - overflow * goto_share);
         search_w = std::max(search_min, search_w - overflow * (1.0f - goto_share));
     }
-    // Drop low-priority elements one at a time until it fits.
     if (compute_needed() > avail) show_undo         = false;
     if (compute_needed() > avail) show_find         = false;
     if (compute_needed() > avail) show_help         = false;
@@ -126,8 +121,7 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
                              ImGuiInputTextFlags_EnterReturnsTrue)) {
             DoSearch(s, doc, core);
         }
-        // Pattern changed — restart from caret/0 instead of resuming past
-        // the previous match for a different pattern.
+        // Pattern changed — restart from caret/0 instead of resuming past the previous match.
         if (ImGui::IsItemEdited()) doc.last_hit = -1;
         if (ImGui::IsItemActive()) doc.focus_field = GuiState::FOCUS_SEARCH;
         if (show_find) {
@@ -146,8 +140,7 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
 
     if (show_help) {
         ImGui::SameLine(0.0f, group_gap);
-        // While the quick reference is up, paint the resting state with
-        // the hover tint so the button reads as "pressed".
+        // Paint the resting state with the hover tint while the panel's up, so the button reads as pressed.
         if (s.show_help) {
             ImGui::PushStyleColor(ImGuiCol_Button,        pal.btn_secondary_hover);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, pal.btn_secondary_active);
@@ -167,9 +160,7 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
         }
     }
 
-    // InvisibleButton + DrawList so the gear glyph is pixel-centered.
-    // ImGui::Button uses font advance metrics and leaves FA glyphs
-    // slightly off-center in a square button.
+    // InvisibleButton + DrawList so the gear is pixel-centered — Button leaves FA glyphs off-center.
     const bool  have_icon = (s.icon_font_small != nullptr);
     const float size      = ImGui::GetFrameHeight();
     const float btn_w     = have_icon ? size : 80.0f * s.content_scale;
@@ -181,9 +172,8 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
 
     if (have_icon) {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
-        // Sample before the click: BeginPopup's click-outside closes this
-        // frame, so a click on the gear while open should toggle off, not
-        // re-open.
+        // Sample before the click — BeginPopup closes on click-outside this same frame,
+        // so a click on the gear while open should toggle off, not re-open.
         const bool popup_open = ImGui::IsPopupOpen("Settings##settings");
         const bool clicked = ImGui::InvisibleButton("##settings", ImVec2(size, size));
         const bool hovered = ImGui::IsItemHovered();
@@ -209,8 +199,6 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
         ImGui::PopFont();
 
         if (hovered) {
-            // Mirror the Settings popup frame so the tooltip agrees
-            // visually with the panel it launches.
             ScopedStyledTooltip tip;
             if (s.mono_font) ImGui::PushFont(s.mono_font);
             ImGui::TextUnformatted("Settings");
@@ -234,4 +222,4 @@ void RenderToolbar(GuiState& s, DocumentState& doc,
     }
 }
 
-} // namespace ui
+}

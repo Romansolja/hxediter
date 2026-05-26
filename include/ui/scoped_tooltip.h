@@ -4,16 +4,7 @@
 
 namespace ui {
 
-// Begin a tooltip with the editor's standard rounded/padded frame, scoped
-// to the enclosing block. The caller writes the body between construction
-// and end of scope (with or without PushFont, with or without printf-style
-// formatting) — the guard handles only the outer chrome so each site can
-// keep its own content rendering.
-//
-//   if (ImGui::IsItemHovered()) {
-//       ui::ScopedStyledTooltip tip;
-//       ImGui::TextUnformatted("Hello");
-//   }
+// RAII guard for the editor's standard rounded/padded tooltip frame. Caller writes the body.
 struct ScopedStyledTooltip {
     ScopedStyledTooltip() {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
@@ -28,4 +19,4 @@ struct ScopedStyledTooltip {
     ScopedStyledTooltip& operator=(const ScopedStyledTooltip&) = delete;
 };
 
-} // namespace ui
+}

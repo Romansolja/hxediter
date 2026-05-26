@@ -34,15 +34,12 @@ static float ComputeHexRowWidth(float offset_w, float char_w, float byte_w,
 HexLayout ComputeHexLayout(float avail_w, float scale) {
     HexLayout L;
     L.bytes_per_line = 16;
-    // CalcTextSize returns unscaled metrics (outer window's FontWindowScale
-    // is 1); multiply by scale so the layout matches what the grid child
-    // renders at SetWindowFontScale(scale).
+    // CalcTextSize returns unscaled metrics — multiply by scale to match SetWindowFontScale(scale).
     L.char_w   = ImGui::CalcTextSize("0").x * scale;
     L.byte_w   = ImGui::CalcTextSize("FF").x * scale;
     L.offset_w = ImGui::CalcTextSize("00000000").x * scale;
 
-    // Step from very wide down. 4K / ultrawide can comfortably fit
-    // 128–256 bytes/row; the old cap of 64 left half the screen blank.
+    // Try wide first — 4K / ultrawide fits 128–256 bytes/row comfortably.
     int best = 1;
     for (int candidate = 256; candidate >= 8; candidate -= 4) {
         if (ComputeHexRowWidth(L.offset_w, L.char_w, L.byte_w, candidate) <= avail_w) {
@@ -113,9 +110,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     const int64_t bpl       = (int64_t)L.bytes_per_line;
     const bool    readonly  = core.IsReadOnly();
 
-    // Total rows for the whole file. Clipper takes int — clamp at INT_MAX
-    // (~32 GiB at the default 16 BPL, up to ~512 GiB at the dynamic max of
-    // 256 BPL; beyond that we'd need a 64-bit clipper).
+    // Clipper takes int — clamp at INT_MAX (~32 GiB at 16 BPL, ~512 GiB at 256 BPL).
     int64_t total_rows64 = (file_size + bpl - 1) / bpl;
     if (total_rows64 < 0) total_rows64 = 0;
     int total_rows = (total_rows64 > (int64_t)INT_MAX)
@@ -124,10 +119,8 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
 
     const float line_h = ImGui::GetTextLineHeightWithSpacing();
 
-    // Apply pending scroll *before* the clipper measures, so the visible
-    // range uses the new ScrollY. Only act if the target row isn't already
-    // fully in view — otherwise arrow keys would jerk-recenter on every
-    // keystroke. PgUp/PgDn always move off-screen so they re-center.
+    // Scroll before the clipper measures. Only act if the target row isn't already in view —
+    // otherwise arrow keys would jerk-recenter on every keystroke.
     if (doc.pending_scroll_offset >= 0 && bpl > 0) {
         const int64_t target_row    = doc.pending_scroll_offset / bpl;
         const float   target_y      = (float)target_row * line_h;
@@ -155,8 +148,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
         const int last_row  = clipper.DisplayEnd;   // exclusive
         if (first_row >= last_row) continue;
 
-        // Pull every visible row's bytes in one fread. ~30 visible rows ×
-        // 64 bytes/row ≈ 1.9 KB; the disk cache absorbs it instantly.
+        // Pull every visible row in one fread — ~30 rows × 64 bytes ≈ 1.9 KB, absorbed by cache.
         const int64_t batch_offset = (int64_t)first_row * bpl;
         const int64_t batch_wanted = (int64_t)(last_row - first_row) * bpl;
         std::vector<unsigned char> batch =
@@ -185,9 +177,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
                 unsigned char b   = batch[(size_t)idx_in_batch];
 
                 ImGui::SameLine(L.byte_x[c]);
-                // PushID(const void*) hashes the full 64-bit offset so
-                // 0x00000000 and 0x80000000 don't share an id — current
-                // clipper can't span both, but a future minimap could.
+                // PushID(const void*) hashes the full 64 bits — int variant would collide on 2 GiB+.
                 ImGui::PushID(reinterpret_cast<const void*>(
                     static_cast<uintptr_t>(off)));
 
@@ -228,9 +218,7 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
                             bg_col = ImGui::GetColorU32(caret_bg_col);
                         }
                         ImVec2 cp = ImGui::GetCursorScreenPos();
-                        // Match the clipper's row height so the caret/hit
-                        // background covers the full row band, leaving no
-                        // sliver of zebra peeking through.
+                        // Use clipper row height — otherwise a sliver of zebra peeks through.
                         ImGui::GetWindowDrawList()->AddRectFilled(
                             ImVec2(cp.x - 1, cp.y),
                             ImVec2(cp.x + L.byte_w + 1, cp.y + line_h),
@@ -265,7 +253,6 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
             }
 
             ImGui::SameLine(L.ascii_x);
-            // Sized for the worst case the layout loop can produce.
             char ascii_buf[257];
             int  ascii_len = 0;
             const int ascii_cap = (int)sizeof(ascii_buf) - 1;
@@ -287,4 +274,4 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     }
 }
 
-} // namespace ui
+}

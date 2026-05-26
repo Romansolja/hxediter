@@ -28,8 +28,7 @@ static bool FileExists(const std::string& path) {
     return f.good();
 }
 
-// stb_truetype hard-asserts on garbage input (including WOFF/WOFF2 files
-// renamed to .ttf); reject unrecognized magic up front.
+// stb_truetype hard-asserts on garbage input (incl. WOFF renamed to .ttf) — reject by magic.
 static bool IsValidFontFile(const std::string& path) {
     std::ifstream f(path.c_str(), std::ios::binary);
     if (!f.good()) return false;
@@ -67,31 +66,21 @@ struct AppContext {
     AppState                  state = AppState::StartScreen;
     std::vector<OpenDocument> docs;
     int                       active_doc      = -1;
-    int                       last_titled_doc = -2;   // sentinel: forces first-frame title set
+    int                       last_titled_doc = -2;   // sentinel forces first-frame title set
     std::vector<std::string>  pending_paths;
-    std::vector<int>          close_indices;          // filled by gui; consumed in main
-    // Folders dropped or passed on the CLI land here. Each frame the main
-    // loop drains this, replaces directory_files, and updates directory_label.
+    std::vector<int>          close_indices;
     std::vector<std::string>  pending_directories;
-    // Files in the most-recently-loaded folder, alphabetized. Surfaced in
-    // the tab-bar dropdown so the user picks which to open as tabs —
-    // folder drops no longer auto-open every file.
+    // Files in the most-recently-loaded folder, alphabetized — feeds the tab-bar dropdown.
     std::vector<std::string>  directory_files;
-    std::string               directory_label;        // basename for the dropdown header
-    // Canonical paths of every doc in `docs`. Kept in sync on every
-    // push_back/erase. Backs O(1) dedup during multi-file drops — pairwise
-    // filesystem::equivalent was O(N*M) and froze the UI past a few hundred.
+    std::string               directory_label;
+    // O(1) dedup during multi-file drops — pairwise filesystem::equivalent was O(N*M).
     std::unordered_set<std::string> open_canonical;
     std::string               load_error;
     GLFWwindow*               window = nullptr;
 };
 
-// Stable string key per file — weakly_canonical handles relative paths,
-// case differences, and intermediate symlinks. Errors fall back to the
-// original path (still better than nothing for dedup).
-// TODO: this fires once per dropped path. With kMaxOpenDocs=200 the cost
-// is bounded; if the cap is ever raised much higher, batch the canonical
-// resolution or memoize against the input string.
+// Stable per-file key — weakly_canonical normalizes relative paths, case, and symlinks.
+// On error, falls back to the original path (still better than nothing for dedup).
 static std::string CanonicalKey(const std::string& utf8_path) {
     std::error_code ec;
     auto canon = std::filesystem::weakly_canonical(PathFromUtf8(utf8_path), ec);
@@ -99,8 +88,6 @@ static std::string CanonicalKey(const std::string& utf8_path) {
     return PathToUtf8(canon);
 }
 
-// Linear scan to recover the doc index for a canonical key. Only used
-// when refocusing an already-open file (rare path).
 static int FindDocByCanonical(const std::vector<OpenDocument>& docs,
                               const std::string& canonical_key) {
     for (int i = 0; i < (int)docs.size(); ++i) {
@@ -121,8 +108,6 @@ static void glfw_drop_callback(GLFWwindow* w, int count, const char** paths) {
         auto status = std::filesystem::status(fsp, ec);
         if (ec) continue;
         if (std::filesystem::is_directory(status)) {
-            // Folder drops surface a directory listing in the tab-bar
-            // dropdown; the user explicitly clicks files to open.
             ctx->pending_directories.push_back(p);
         } else if (std::filesystem::is_regular_file(status)) {
             ctx->pending_paths.push_back(p);
@@ -153,9 +138,7 @@ static void UpdateWindowTitle(AppContext& ctx) {
     glfwSetWindowTitle(ctx.window, title.c_str());
 }
 
-// Map AppContext state -> the index that drives the window title. -1
-// stands in for any non-HexView state; only call glfwSetWindowTitle when
-// this target changes.
+// -1 stands in for non-HexView; call glfwSetWindowTitle only when this changes.
 static int TitleTargetIndex(const AppContext& ctx) {
     return (ctx.state == AppState::HexView) ? ctx.active_doc : -1;
 }
@@ -165,8 +148,7 @@ int main(int argc, char* argv[]) {
 
     AppContext ctx;
 
-    // CLI args: each argument is a file or directory; directories are
-    // expanded recursively. Same code path as a multi-file drag-drop.
+    // CLI args take the same path as a multi-file drag-drop.
     std::vector<std::string> utf8_args;
     for (int i = 1; i < argc; ++i) {
         if (argv[i]) utf8_args.emplace_back(argv[i]);
@@ -177,8 +159,6 @@ int main(int argc, char* argv[]) {
         auto status = std::filesystem::status(fsp, ec);
         if (ec) continue;
         if (std::filesystem::is_directory(status)) {
-            // Mirror drag-drop behavior: directories populate the
-            // dropdown listing rather than auto-opening every file.
             ctx.pending_directories.push_back(a);
         } else if (std::filesystem::is_regular_file(status)) {
             ctx.pending_paths.push_back(a);
@@ -195,9 +175,7 @@ int main(int argc, char* argv[]) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-    // Start maximized so 1280x720 doesn't look like a postage stamp on
-    // 4K / ultrawide. The OS still draws normal window chrome — user can
-    // un-maximize via the title-bar button.
+    // Start maximized — 1280x720 is a postage stamp on 4K / ultrawide.
     glfwWindowHint(GLFW_MAXIMIZED, GLFW_TRUE);
 
     GLFWwindow* window = glfwCreateWindow(1280, 720, "hxediter",
@@ -218,17 +196,15 @@ int main(int argc, char* argv[]) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Launched from /Applications cwd is "/" (read-only), so the default
-    // "imgui.ini" silently fails to save. Redirect into Application Support.
-    // Static so the c_str() ImGui holds outlives every frame.
+    // Launched from /Applications, cwd is "/" (read-only) — the default "imgui.ini" silently
+    // fails to save. Redirect into Application Support. Static so io.IniFilename outlives frames.
     if (!platform::AppSupportDir().empty()) {
         static const std::string g_imgui_ini_path =
             platform::AppSupportDir() + "imgui.ini";
         io.IniFilename = g_imgui_ini_path.c_str();
     }
 
-    // Native Cmd-based text-input shortcuts in InputText (Cmd+A/C/V/X,
-    // Option-arrow). Must be set before the first frame.
+    // Cmd-based InputText shortcuts (Cmd+A/C/V/X, Option-arrow). Must be set before first frame.
     io.ConfigMacOSXBehaviors = true;
 
     ImGui::StyleColorsDark();
@@ -251,9 +227,6 @@ int main(int argc, char* argv[]) {
     ui_cfg.OversampleV = 2;
     ImFontConfig mono_cfg = ui_cfg;
 
-    // platform::ResourceDir() returns the .app's Contents/Resources path
-    // so a bundle launched from /Applications can find its fonts.
-    // Prefixing here keeps the candidate lists uniform.
     const std::string& res_dir = platform::ResourceDir();
     std::vector<std::string> ui_font_candidates   = { res_dir + "assets/fonts/Roboto-Regular.ttf" };
     std::vector<std::string> mono_font_candidates = { res_dir + "assets/fonts/JetBrainsMono-Regular.ttf" };
@@ -278,8 +251,7 @@ int main(int argc, char* argv[]) {
         if (title_font) break;
     }
 
-    // Full FA range at 96px blows past OpenGL's max texture size on many
-    // GPUs, so narrow to codepoints we actually use.
+    // Full FA range at 96px exceeds many GPUs' max texture size — narrow to used codepoints.
     static constexpr ImWchar fa_ranges[] = {
         0xf15b, 0xf15b,   // ICON_FA_FILE
         0
@@ -291,8 +263,7 @@ int main(int argc, char* argv[]) {
     ImFont* icon_font = TryLoadFont(io,
         res_dir + "assets/fonts/fa-solid-900.ttf", 96.0f * content_scale, &icon_cfg, fa_ranges);
 
-    // Separate small-size FA atlas for toolbar icons — each glyph renders
-    // at its native size without per-button font scaling.
+    // Small FA atlas for toolbar icons — native size, no per-button scaling.
     static constexpr ImWchar fa_small_ranges[] = {
         0xf013, 0xf013,   // ICON_FA_GEAR
         0xf078, 0xf078,   // ICON_FA_CHEVRON_DOWN
@@ -314,20 +285,16 @@ int main(int argc, char* argv[]) {
     SetEditorFonts(ui_font, mono_font, title_font, icon_font, icon_font_small);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-    // macOS Core Profile (set by FORWARD_COMPAT above) rejects GLSL
-    // #version 130 — Apple supports 3.2+ only, mapping to GLSL 150.
+    // macOS Core Profile rejects GLSL <150 — Apple supports 3.2+ only, mapping to GLSL 150.
     ImGui_ImplOpenGL3_Init("#version 150");
 
-    // Restore the user's last-saved sliders / palette / toggles before the
-    // first render so the first frame already reflects their preferences.
     LoadGuiPreferences();
 
     ImVec4 clear_color = ImVec4(0.10f, 0.10f, 0.12f, 1.00f);
     bool startup_measured = false;
 
     while (!glfwWindowShouldClose(window)) {
-        // Background throttle drops to ~15 FPS when unfocused; any queued
-        // event wakes it instantly.
+        // ~15 FPS when unfocused; queued events wake the loop instantly.
         if (BackgroundThrottle() &&
             !glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
             glfwWaitEventsTimeout(1.0 / 15.0);
@@ -335,8 +302,7 @@ int main(int argc, char* argv[]) {
             glfwPollEvents();
         }
 
-        // Drain pending directories: replace the dropdown listing with
-        // the latest folder's contents (only the last on a multi-drop).
+        // Drain pending directories — on a multi-drop, only the last one's listing is kept.
         if (!ctx.pending_directories.empty()) {
             std::vector<std::string> dirs;
             dirs.swap(ctx.pending_directories);
@@ -346,8 +312,7 @@ int main(int argc, char* argv[]) {
                 ExpandDirectoryInto(PathFromUtf8(chosen), files);
             ctx.directory_files = std::move(files);
 
-            // PathBasename strips trailing slashes; fall back to the
-            // whole path for the filesystem root (empty basename).
+            // Fall back to the whole path when basename is empty (filesystem root).
             std::string label = PathBasename(chosen);
             if (label.empty()) label = chosen;
             ctx.directory_label = std::move(label);
@@ -358,8 +323,6 @@ int main(int argc, char* argv[]) {
                 ctx.load_error.clear();
             }
 
-            // Surface partial-walk outcomes (caps hit or sub-tree errors) so
-            // the user knows the listing isn't exhaustive.
             if (walk.truncated_by_count || walk.truncated_by_time ||
                 walk.step_errors > 0) {
                 const char* why =
@@ -384,10 +347,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Drain pending paths: each either focuses an already-open tab
-        // or creates a new one. Errors are batched into ctx.load_error.
-        // A hard cap keeps a careless drop-of-node_modules from
-        // exhausting file handles or blowing up ImGui's tab bar.
+        // Drain pending paths — focus existing tabs or open new ones. Cap keeps a careless
+        // drop-of-node_modules from exhausting file handles.
         if (!ctx.pending_paths.empty()) {
             constexpr size_t kMaxOpenDocs = 200;
 
@@ -401,8 +362,7 @@ int main(int argc, char* argv[]) {
             int  skipped_cap    = 0;
 
             for (const std::string& path : to_open) {
-                // Cheap cap check first — once full, the rest of the batch
-                // is counted and skipped without per-path filesystem I/O.
+                // Cap check first — skip the rest without per-path filesystem I/O.
                 if (ctx.docs.size() >= kMaxOpenDocs) {
                     skipped_cap++;
                     continue;
@@ -443,9 +403,6 @@ int main(int argc, char* argv[]) {
                 ctx.load_error = BuildBatchError(first_err, additional_err);
             }
 
-            // Single place that surfaces batch errors and the cap
-            // message, regardless of which arm we landed in. The start-
-            // screen path also seeds ctx.load_error for in-screen render.
             if (!first_err.empty() && ctx.state == AppState::HexView) {
                 std::string msg = BuildBatchError(first_err, additional_err);
                 std::fprintf(stderr, "Error opening: %s\n", msg.c_str());
@@ -464,8 +421,6 @@ int main(int argc, char* argv[]) {
             ImGui::ClearActiveID();
         }
 
-        // Title tracks the active tab. Single-source-of-truth target:
-        // the active doc index when we have one, -1 otherwise.
         {
             const int target = TitleTargetIndex(ctx);
             if (target != ctx.last_titled_doc) {
@@ -500,7 +455,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Consume tab close requests after render so indices still match.
+        // Process close requests after render so indices still match.
         if (!ctx.close_indices.empty()) {
             std::sort(ctx.close_indices.begin(), ctx.close_indices.end(),
                       std::greater<int>());
@@ -509,8 +464,7 @@ int main(int argc, char* argv[]) {
                 ctx.close_indices.end());
             for (int idx : ctx.close_indices) {
                 if (idx < 0 || idx >= (int)ctx.docs.size()) continue;
-                // Drop the canonical entry first — must read the filename
-                // before the unique_ptr is destroyed.
+                // Read the filename before the unique_ptr is destroyed.
                 if (ctx.docs[idx].core) {
                     ctx.open_canonical.erase(
                         CanonicalKey(ctx.docs[idx].core->GetFilename()));
@@ -520,9 +474,7 @@ int main(int argc, char* argv[]) {
             }
             if (ctx.docs.empty()) {
                 ctx.active_doc = -1;
-                // A loaded folder keeps the user in HexView with the
-                // empty-state prompt; only revert to the start screen
-                // when there's also nothing to pick from.
+                // Stay in HexView with the empty-state prompt as long as a folder is loaded.
                 if (ctx.directory_files.empty()) {
                     ctx.state = AppState::StartScreen;
                 }
@@ -551,10 +503,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Persist the user's current settings before tearing ImGui down. Done
-    // here (rather than on every change) because the relevant fields all
-    // mutate from inside ImGui callbacks — saving on shutdown captures the
-    // final state with no per-widget plumbing.
+    // Save on shutdown — captures final state without per-widget plumbing in ImGui callbacks.
     SaveGuiPreferences();
 
     ImGui_ImplOpenGL3_Shutdown();

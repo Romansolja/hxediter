@@ -50,7 +50,6 @@ const char* GetContextualHint(const DocumentState& doc,
     return "Click any byte to edit, arrow keys to move, F1 for shortcuts";
 }
 
-// Matches help_panel.cpp's close affordance so both sites read identically.
 static bool DismissButton(const char* id, float size,
                           const theme::Palette& pal, float alpha) {
     ImVec4 hover_c = pal.help_close_hover;  hover_c.w *= alpha;
@@ -86,8 +85,7 @@ static bool DismissButton(const char* id, float size,
 
 void RenderStatusBar(GuiState& s, DocumentState& doc,
                      const theme::Palette& pal, HexEditorCore& core) {
-    // Layout pixel constants follow chrome_scale so spacing tracks the
-    // SetWindowFontScale applied to the main window.
+    // Pixel constants scaled by chrome_scale to match the main window's SetWindowFontScale.
     const float cs           = s.chrome_scale;
     const float group_gap_px = layout::kStatusGroupGap * cs;
     const float in_group_px  = layout::kStatusInGroup  * cs;
@@ -96,9 +94,7 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
     ImGui::Separator();
     ImGui::AlignTextToFramePadding();
 
-    // Caret offset (em-dash when nothing has been clicked) plus file size
-    // in bytes. No "page N/M" — the body scrolls freely. Size is decimal
-    // only; the hex twin was redundant noise.
+    // Em-dash when nothing's been clicked.
     if (doc.caret_byte >= 0) {
         ImGui::Text("0x%08" PRIX64 "   %" PRId64 " B",
                     (uint64_t)doc.caret_byte,
@@ -155,7 +151,7 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
         ImGui::EndTooltip();
     }
 
-    // Sticky messages pin until the user clicks x; non-sticky fade on a timer.
+    // Sticky pins until dismissed; non-sticky fades on a timer.
     if (s.status_timer > 0.0f) {
         ImVec4 bg, fg;
         switch (s.status_kind) {
@@ -189,8 +185,7 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
         }
     }
 
-    // Priority tail: sticky (above) > startup metric > contextual hint.
-    // Hint truncates with ellipsis then drops when <~3 chars fit.
+    // Priority tail: sticky > startup metric > contextual hint (truncates, then drops).
     char metric[32];
     if (s.startup_measured)
         std::snprintf(metric, sizeof(metric), "Startup: %.0f ms", s.startup_duration_ms);
@@ -237,4 +232,4 @@ void RenderStatusBar(GuiState& s, DocumentState& doc,
     }
 }
 
-} // namespace ui
+}

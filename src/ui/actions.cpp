@@ -63,10 +63,8 @@ void DoGoto(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     s.MarkInteracted();
     doc.caret_byte            = signed_off;
     doc.pending_scroll_offset = signed_off;
-    // Drop the previous search hit's green highlight — leaving it lit at
-    // the old offset after a manual jump misleads the user into thinking
-    // the match is still there. DoSearch and the search-field edit handler
-    // already reset this; Goto needs the same treatment to stay consistent.
+    // Drop the search hit highlight — leaving it lit at the old offset
+    // after a manual jump misleads the user into thinking it's still there.
     doc.last_hit = -1;
     char buf[64];
     std::snprintf(buf, sizeof(buf), "Jumped to 0x%" PRIX64, (uint64_t)off);
@@ -157,4 +155,4 @@ void CommitEdit(GuiState& s, DocumentState& doc, HexEditorCore& core) {
     doc.selected_byte = -1;
 }
 
-} // namespace ui
+}

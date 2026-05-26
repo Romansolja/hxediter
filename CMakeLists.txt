@@ -1,12 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
 
-# Apple SDK selection MUST happen before project(): the compiler-id and
-# feature-detection probes that project() fires off bake in whatever SDK
-# was active at that moment. Setting CMAKE_OSX_DEPLOYMENT_TARGET later
-# only affects subsequent compile commands — any compile test between
-# project() and the override would silently use the host SDK's default
-# (currently 15.x on this M5). enable_language(OBJCXX) is deferred until
-# after project() because it itself requires the project to exist.
+# SDK selection MUST come before project() — project()'s feature-detection probes bake in
+# whatever SDK is active at the time. Later overrides only affect subsequent compile commands.
 if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "")
     set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "")
@@ -30,9 +25,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# ---------------------------------------------------------------------------
-# GLFW — windowing and input
-# ---------------------------------------------------------------------------
+# GLFW
 set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -45,13 +38,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glfw)
 
-# ---------------------------------------------------------------------------
-# Dear ImGui — no native CMake support upstream, so we build it ourselves.
-# Target is named `hx_imgui` (not `imgui`) to avoid a name collision if a
-# future ImGui release ever ships a top-level CMakeLists that defines its
-# own `imgui` target — FetchContent_MakeAvailable would then auto-include
-# it and our add_library() would fail with a duplicate-target error.
-# ---------------------------------------------------------------------------
+# Dear ImGui — no upstream CMake. Target name hx_imgui (not imgui) so a future upstream
+# CMakeLists defining `imgui` wouldn't collide via FetchContent_MakeAvailable.
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -74,14 +62,8 @@ target_include_directories(hx_imgui PUBLIC
 )
 target_link_libraries(hx_imgui PUBLIC glfw)
 
-# ---------------------------------------------------------------------------
-# OpenGL (system library)
-# ---------------------------------------------------------------------------
 find_package(OpenGL REQUIRED)
 
-# ---------------------------------------------------------------------------
-# hxediter executable
-# ---------------------------------------------------------------------------
 set(HXEDITER_SOURCES
     src/main.cpp
     src/gui.cpp
@@ -124,24 +106,18 @@ target_link_libraries(hxediter PRIVATE
 
 target_compile_definitions(hxediter PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
-# Bake the source dir into the binary so platform::ResourceDir() can fall
-# back to the in-tree assets/ when the binary is run outside a .app
-# bundle (debugger, CI smoke test, build/hxediter directly). Production
-# DMG launches via /Applications/hxediter.app, where mainBundle's
-# resourcePath points at Contents/Resources/ and this fallback is unused.
+# Bake source dir for platform::ResourceDir()'s out-of-bundle fallback (debugger, CI).
 target_compile_definitions(hxediter PRIVATE
     HXEDITER_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
-# MACOSX_BUNDLE_ICON_FILE deliberately omitted until we ship a real
-# hxediter.icns: setting it to a non-existent file makes Console.app
-# log a "couldn't load icon" warning every launch and codesign emits
-# a (non-fatal) advisory about an unreferenced resource. With the
-# property unset, the Info.plist template's @MACOSX_BUNDLE_ICON_FILE@
-# substitutes to empty and macOS falls back to a generic icon
-# silently. To wire up an icon later: generate hxediter.icns via
-# `iconutil -c icns hx.iconset/`, drop it in assets/ (it gets staged
-# into Contents/Resources by the POST_BUILD below), and re-add the
-# MACOSX_BUNDLE_ICON_FILE "hxediter.icns" line here.
+# OpenGL is deprecated on macOS 10.14+ but still works — silence until we switch to Metal.
+if(APPLE)
+    target_compile_definitions(hxediter PRIVATE GL_SILENCE_DEPRECATION)
+endif()
+
+# MACOSX_BUNDLE_ICON_FILE intentionally unset — a non-existent icon name triggers Console
+# warnings and codesign advisories. To add an icon: drop hxediter.icns in assets/ and
+# re-add MACOSX_BUNDLE_ICON_FILE "hxediter.icns" below.
 set_target_properties(hxediter PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/cmake/Info.plist.in
@@ -151,10 +127,8 @@ set_target_properties(hxediter PROPERTIES
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.romansolja.hxediter"
     MACOSX_BUNDLE_COPYRIGHT "Copyright © 2026 Romansolja. MIT licensed.")
 
-# Stage runtime assets (fonts) into the .app's Contents/Resources/assets
-# directory on every build so font updates land without forcing a
-# reconfigure. platform::ResourceDir() returns [[NSBundle mainBundle]
-# resourcePath] at runtime, so the fonts must live inside the bundle.
+# Stage fonts into Contents/Resources/assets every build — platform::ResourceDir() reads
+# from the bundle, so font updates need to land there without a reconfigure.
 add_custom_command(TARGET hxediter POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/assets
@@ -162,22 +136,10 @@ add_custom_command(TARGET hxediter POST_BUILD
     COMMENT "Staging assets into hxediter.app/Contents/Resources"
 )
 
-# ---------------------------------------------------------------------------
-# Install rules
-# ---------------------------------------------------------------------------
-# hxediter is a MACOSX_BUNDLE target, which must use BUNDLE DESTINATION
-# rather than RUNTIME — installing a .app via RUNTIME copies only the
-# executable Mach-O and orphans Contents/Resources. The bundle is
-# self-contained (assets are inside Contents/Resources via POST_BUILD;
-# LICENSE/copyright are surfaced in Info.plist), so we don't ship loose
-# asset / license files in the DMG — only the .app and the /Applications
-# symlink CPack's DragNDrop generator auto-adds. Cleaner mount UX: one
-# icon to drag.
+# MACOSX_BUNDLE needs BUNDLE DESTINATION — RUNTIME would copy only the Mach-O and orphan Resources.
 install(TARGETS hxediter BUNDLE DESTINATION .)
 
-# ---------------------------------------------------------------------------
 # CPack — DragNDrop DMG
-# ---------------------------------------------------------------------------
 set(CPACK_PACKAGE_NAME "HxEditer")
 set(CPACK_PACKAGE_VENDOR "Romansolja")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A hex editor built with Dear ImGui")

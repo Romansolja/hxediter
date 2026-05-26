@@ -1,7 +1,4 @@
-// NSOpenPanel-backed platform::OpenFileDialog and PickFolderDialog.
-// NSOpenPanel must run on the main thread; GLFW's macOS event loop runs
-// on the AppKit main thread, so ImGui button callbacks are already there.
-// No GCD dispatch needed.
+// NSOpenPanel needs the main thread — GLFW's macOS loop is on AppKit's, so no GCD dispatch.
 
 #ifdef __APPLE__
 
@@ -20,9 +17,7 @@ std::optional<std::string> RunPanel(const char* title,
         NSOpenPanel* panel = [NSOpenPanel openPanel];
         if (title && *title) {
             panel.title   = @(title);
-            // Older macOS shows title in window chrome; newer versions
-            // hide it but the message below the file list still acts as
-            // a heading. Setting both keeps the dialog readable everywhere.
+            // Set both — older macOS shows the title chrome, newer macOS hides it but shows message.
             panel.message = @(title);
         }
         panel.canChooseFiles            = can_choose_files       ? YES : NO;
@@ -30,12 +25,8 @@ std::optional<std::string> RunPanel(const char* title,
         panel.allowsMultipleSelection   = NO;
         panel.resolvesAliases           = YES;
         panel.canCreateDirectories      = can_choose_directories ? YES : NO;
-        // Let the user navigate INTO .app/.bundle/.framework directories
-        // when picking a file. Otherwise NSOpenPanel treats packages as
-        // opaque entities and returns the .app *directory* — hex-editor
-        // users want to inspect the Mach-O inside (Contents/MacOS/<exe>).
-        // PickFolderDialog leaves it off — a "folder" should treat .app
-        // as one entity, matching the user's mental model.
+        // File-pick: descend into .app/.bundle/.framework so users can hit the inner Mach-O.
+        // Folder-pick: leave off — a folder pick should treat .app as one entity.
         if (can_choose_files && !can_choose_directories) {
             panel.treatsFilePackagesAsDirectories = YES;
         }
@@ -52,7 +43,7 @@ std::optional<std::string> RunPanel(const char* title,
     }
 }
 
-} // anonymous namespace
+}
 
 std::optional<std::string> OpenFileDialog(const char* title) {
     return RunPanel(title, /*can_choose_files=*/true,
@@ -64,6 +55,6 @@ std::optional<std::string> PickFolderDialog(const char* title) {
                            /*can_choose_directories=*/true);
 }
 
-} // namespace platform
+}
 
-#endif // __APPLE__
+#endif

@@ -19,7 +19,7 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Fade the drop-zone overlay in/out at the help-panel animation speed.
+    // Drop-zone overlay fade — uses the help-panel animation speed.
     {
         float target = (drag_over_state != 0) ? 1.0f : 0.0f;
         float t = ImGui::GetIO().DeltaTime * layout::kHelpAnimSpeed;
@@ -63,11 +63,8 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     if (s.ui_font) ImGui::PopFont();
 
     ImGuiStyle& style = ImGui::GetStyle();
-    // Layout pixel constants follow chrome_scale so the start screen
-    // tracks the SetWindowFontScale applied to the main window.
     const float cs = s.chrome_scale;
-    // Both buttons share the widest label width so they line up
-    // vertically. Heights are equal because text height is identical.
+    // Buttons share the widest label width so they line up vertically.
     float button_label_w = button_label_sz.x;
     if (button_folder_label_sz.x > button_label_w) button_label_w = button_folder_label_sz.x;
     ImVec2 button_sz(button_label_w + style.FramePadding.x * 2.0f + 40.0f * cs,
@@ -136,9 +133,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 
     y += button_sz.y + gap_between_buttons;
-    // Second button: "Open Folder..." picks a directory and surfaces its
-    // files in the tab-bar dropdown — same destination as a folder
-    // drag-drop or a folder passed on the CLI.
     ImGui::SetCursorScreenPos(ImVec2(col_cx - button_sz.x * 0.5f, y));
     if (ImGui::Button(button_folder_str, button_sz)) {
         if (auto picked = platform::PickFolderDialog("Choose a folder to open")) {
@@ -176,8 +170,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                                      origin.y + avail.y - metric_sz.y - pad));
     ImGui::TextDisabled("%s", metric);
 
-    // Top-right read-only toggle; main.cpp consults this via
-    // ReadonlyDefault() right after constructing a HexEditorCore.
     const float box_h = ImGui::GetFrameHeight();
     ImGui::SetCursorScreenPos(ImVec2(origin.x + avail.x - box_h - pad,
                                      origin.y + pad));
@@ -200,4 +192,4 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
     }
 }
 
-} // namespace ui
+}
