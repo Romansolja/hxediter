@@ -177,6 +177,7 @@ bool HexEditorCore::IsReadOnly() const
 void HexEditorCore::ForceReadOnly()
 {
     state_.is_readonly = 1;
+    forced_readonly_   = true;
 }
 
 int HexEditorCore::GetUndoCount() const
@@ -201,13 +202,47 @@ bool HexEditorCore::ReloadFromDisk()
 {
     if (state_.fp == nullptr) return false;
 
+    // An atomic replace (write-temp + rename) unlinks the original inode and
+    // points filename_ at a new one. Our existing FILE* keeps the old inode
+    // alive — reads would still serve stale bytes, while edits/undo (which
+    // write by path) would land on the new inode. Close and reopen so reads
+    // and writes share an inode again.
+    fclose(state_.fp);
+    state_.fp = open_file_shared(state_.filename, "rb");
+    if (state_.fp == nullptr) return false;
+
+    // _IONBF — same rationale as the constructor: with default buffering,
+    // ReadAt would serve cached bytes after an edit went through a separate
+    // write handle. Refuse to operate rather than silently desync.
+    if (setvbuf(state_.fp, nullptr, _IONBF, 0) != 0) {
+        fclose(state_.fp);
+        state_.fp = nullptr;
+        return false;
+    }
+
     int64_t new_size = get_file_size(state_.fp);
-    if (new_size < 0) return false;
+    if (new_size < 0) {
+        fclose(state_.fp);
+        state_.fp = nullptr;
+        return false;
+    }
     state_.file_size = new_size;
 
     // Drop undo — old offsets may no longer refer to the same bytes.
     state_.undo_count = 0;
     state_.undo_head  = 0;
+
+    // Re-probe writability: the new inode can have different perms than the
+    // original. ForceReadOnly is a one-way latch and stays on regardless.
+    if (!forced_readonly_) {
+        FILE* probe = open_file_shared(state_.filename, "rb+");
+        if (probe != nullptr) {
+            fclose(probe);
+            state_.is_readonly = 0;
+        } else {
+            state_.is_readonly = 1;
+        }
+    }
 
     baseline_token_ = get_file_mtime_token(state_.filename);
     return true;

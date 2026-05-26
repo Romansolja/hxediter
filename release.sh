@@ -9,7 +9,23 @@
 # refuses to launch that even with right-click → Open.
 set -euo pipefail
 
-VERSION="${1:?usage: release.sh VERSION}"
+# Single source of truth: project(... VERSION X.Y.Z ...) in CMakeLists.txt.
+# cpack reads the same value into CPACK_PACKAGE_FILE_NAME, so the DMG name and
+# this script can never drift. Accepts an optional positional argument as a
+# sanity check — useful for catching "I forgot to bump CMakeLists" before
+# signing / packaging eats minutes of build time.
+CMAKE_VERSION=$(sed -n -E 's/^[[:space:]]*VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' \
+                CMakeLists.txt | head -n1)
+if [ -z "$CMAKE_VERSION" ]; then
+    echo "Failed to parse VERSION from CMakeLists.txt project()." >&2
+    exit 1
+fi
+if [ "${1-}" != "" ] && [ "$1" != "$CMAKE_VERSION" ]; then
+    echo "Version mismatch: argument '$1' != CMakeLists.txt '$CMAKE_VERSION'." >&2
+    echo "Bump project(... VERSION ...) in CMakeLists.txt, then re-run." >&2
+    exit 1
+fi
+VERSION="$CMAKE_VERSION"
 APP="build/hxediter.app"
 DMG="build/HxEditer-${VERSION}-macos-arm64.dmg"
 

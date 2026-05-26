@@ -23,6 +23,15 @@ set(PROJECT_LICENSE "MIT")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# .mm files compile through clang's ObjC++ frontend, which otherwise picks
+# whatever default the host SDK ships (gnu++17 today, but not guaranteed).
+# Lock it to the same C++17 the rest of the codebase compiles against so a
+# future Xcode bump can't introduce a quiet language-mismatch ABI seam.
+if(APPLE)
+    set(CMAKE_OBJCXX_STANDARD 17)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
+
 include(FetchContent)
 
 # GLFW
@@ -31,10 +40,14 @@ set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 
+# Pinned to commit SHAs (not tag names) so an upstream-moved tag can't change
+# the build under us. GIT_SHALLOW skips clone history we don't need.
+# Pairs noted for readability — the SHA is the source of truth.
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
-    GIT_TAG        3.4
+    GIT_TAG        a74efa0d5628b74adc0426af4c5710e287fa7c2c  # tag: 3.4
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(glfw)
 
@@ -43,7 +56,8 @@ FetchContent_MakeAvailable(glfw)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.91.8
+    GIT_TAG        dbb5eeaadffb6a3ba6a60de1290312e5802dba5a  # tag: v1.91.8
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
 
@@ -74,6 +88,7 @@ set(HXEDITER_SOURCES
     src/ui/theme.cpp
     src/ui/gui_state.cpp
     src/ui/actions.cpp
+    src/ui/hex_parse.cpp
     src/ui/toolbar.cpp
     src/ui/hex_grid.cpp
     src/ui/status_bar.cpp
@@ -136,6 +151,20 @@ add_custom_command(TARGET hxediter POST_BUILD
     COMMENT "Staging assets into hxediter.app/Contents/Resources"
 )
 
+# Apache 2.0 / SIL OFL / Zlib all require redistribution of the license notice
+# alongside the binary that uses the work. Drop LICENSE.txt + NOTICES.md into
+# Contents/Resources so the .app is self-contained — extracting it from the DMG
+# without the source tree still ships the notices.
+add_custom_command(TARGET hxediter POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/LICENSE.txt
+        $<TARGET_BUNDLE_CONTENT_DIR:hxediter>/Resources/LICENSE.txt
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/NOTICES.md
+        $<TARGET_BUNDLE_CONTENT_DIR:hxediter>/Resources/NOTICES.md
+    COMMENT "Staging LICENSE.txt + NOTICES.md into hxediter.app/Contents/Resources"
+)
+
 # MACOSX_BUNDLE needs BUNDLE DESTINATION — RUNTIME would copy only the Mach-O and orphan Resources.
 install(TARGETS hxediter BUNDLE DESTINATION .)
 
@@ -160,3 +189,11 @@ add_custom_target(make_installer
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Running CPack to produce the DragNDrop .dmg disk image"
 )
+
+# Tests — off by default so a plain `cmake --build` stays fast. Enable with
+# -DHXEDITER_BUILD_TESTS=ON (CI sets this). Runs with `ctest --test-dir build`.
+option(HXEDITER_BUILD_TESTS "Build unit and integration tests" OFF)
+if(HXEDITER_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

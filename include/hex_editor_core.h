@@ -62,4 +62,5 @@ private:
     EditorState state_;
     std::string filename_storage_;
     int64_t     baseline_token_ = -1;
+    bool        forced_readonly_ = false;  // ForceReadOnly latched on
 };

@@ -13,20 +13,10 @@ namespace ui {
 void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       int drag_over_state,
                        std::vector<std::string>* out_pending_directories) {
     ImVec2 avail  = ImGui::GetContentRegionAvail();
     ImVec2 origin = ImGui::GetCursorScreenPos();
     ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    // Drop-zone overlay fade — uses the help-panel animation speed.
-    {
-        float target = (drag_over_state != 0) ? 1.0f : 0.0f;
-        float t = ImGui::GetIO().DeltaTime * layout::kHelpAnimSpeed;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
-        s.drag_overlay_anim += (target - s.drag_overlay_anim) * t;
-    }
 
     ImU32 top_col    = ImGui::GetColorU32(pal.start_bg_top);
     ImU32 bottom_col = ImGui::GetColorU32(pal.start_bg_bottom);
@@ -178,18 +168,6 @@ void RenderStartScreen(GuiState& s, const theme::Palette& pal,
         ImGui::SetTooltip("Open files as read-only");
     }
     if (s.ui_font) ImGui::PopFont();
-
-    if (s.drag_overlay_anim > 0.001f) {
-        const bool invalid = (drag_over_state == 2);
-        const float anim   = s.drag_overlay_anim;
-        const ImVec4 tint  = invalid ? pal.status_err_bg : pal.btn_primary;
-
-        ImVec4 fill = tint;
-        fill.w = (invalid ? 0.28f : 0.22f) * anim;
-        dl->AddRectFilled(origin,
-                          ImVec2(origin.x + avail.x, origin.y + avail.y),
-                          ImGui::GetColorU32(fill));
-    }
 }
 
 }

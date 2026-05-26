@@ -40,14 +40,12 @@ bool BackgroundThrottle();
 void SetExternalStatus(const std::string& msg, bool is_error);
 
 // out_pending_paths/_directories/_close_indices are drained by the main loop.
-// drag_over_state: 0=none, 1=valid, 2=rejected (start screen only).
 // out_clear_directory: UI sets true to ask main to forget the current folder.
 void RenderHexEditorUI(AppState state,
                        std::vector<OpenDocument>* docs,
                        int* active_doc,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       int drag_over_state,
                        std::vector<int>* out_close_indices,
                        const std::vector<std::string>* directory_files,
                        const std::string* directory_label,

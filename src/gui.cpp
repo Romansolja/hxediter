@@ -263,20 +263,35 @@ bool RenderTabDirDropdown(ui::GuiState& s,
         if (have_dir) {
             ImGui::TextDisabled("Files in %s", directory_label->c_str());
             ImGui::Separator();
-            // ##suffix disambiguates duplicate basenames — same label triggers ImGui ID conflict.
-            for (int i = 0; i < (int)directory_files->size(); ++i) {
-                const std::string& path = (*directory_files)[i];
-                std::string base = TabLabelBase(path);
-                char label[280];
-                std::snprintf(label, sizeof(label), "%s##dirf%d", base.c_str(), i);
-                if (ImGui::Selectable(label) && out_pending_paths) {
-                    out_pending_paths->push_back(path);
-                    any_action = true;
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", path.c_str());
+
+            // Scroll region + clipper: a 50k-entry folder otherwise builds
+            // 50k Selectables per frame and extrudes the popup off-screen.
+            // Capping the child at 12 rows lets ImGuiListClipper skip every
+            // entry outside the visible band — only the ~12 on-screen rows
+            // pay the Selectable/tooltip cost per frame.
+            const float row_h   = ImGui::GetTextLineHeightWithSpacing();
+            const float child_h = row_h * 12.0f;
+            ImGui::BeginChild("##dirfiles_scroll", ImVec2(0, child_h), false);
+            ImGuiListClipper clipper;
+            clipper.Begin((int)directory_files->size());
+            while (clipper.Step()) {
+                for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+                    const std::string& path = (*directory_files)[i];
+                    std::string base = TabLabelBase(path);
+                    // ##suffix disambiguates duplicate basenames — same label
+                    // triggers ImGui ID conflict.
+                    char label[280];
+                    std::snprintf(label, sizeof(label), "%s##dirf%d", base.c_str(), i);
+                    if (ImGui::Selectable(label) && out_pending_paths) {
+                        out_pending_paths->push_back(path);
+                        any_action = true;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", path.c_str());
+                    }
                 }
             }
+            ImGui::EndChild();
         }
 
         if (!docs.empty()) {
@@ -466,7 +481,6 @@ void RenderHexEditorUI(AppState state,
                        int* active_doc,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       int drag_over_state,
                        std::vector<int>* out_close_indices,
                        const std::vector<std::string>* directory_files,
                        const std::string* directory_label,
@@ -506,7 +520,7 @@ void RenderHexEditorUI(AppState state,
 
     if (state == AppState::StartScreen) {
         ui::RenderStartScreen(s, pal, load_error, out_pending_paths,
-                              drag_over_state, out_pending_directories);
+                              out_pending_directories);
         ui::theme::PopEditorStyle();
         ImGui::End();
         return;
@@ -607,7 +621,9 @@ void RenderHexEditorUI(AppState state,
     // Restore 1.0 for the layout calc, then restore chrome_scale for the status-bar reservation.
     ImGui::SetWindowFontScale(1.0f);
     ui::HexLayout layout =
-        ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x, s.font_scale);
+        ui::ComputeHexLayout(ImGui::GetContentRegionAvail().x,
+                             core_ref.GetFileSize(),
+                             s.font_scale);
     ImGui::SetWindowFontScale(s.chrome_scale);
 
     // Zero WindowPadding so header and body share window.Pos.x — otherwise byte columns

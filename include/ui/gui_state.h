@@ -21,8 +21,6 @@ struct GuiState {
     bool  user_interacted = false;
     float help_anim       = 1.0f;
 
-    float drag_overlay_anim = 0.0f;     // lerped toward 1 while an OS drag hovers
-
     bool show_settings = false;
 
     // Only applies to newly opened files — toggling does not retro-affect open tabs.

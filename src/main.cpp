@@ -294,13 +294,18 @@ int main(int argc, char* argv[]) {
     bool startup_measured = false;
 
     while (!glfwWindowShouldClose(window)) {
-        // ~15 FPS when unfocused; queued events wake the loop instantly.
+        // Was glfwPollEvents in the focused branch — a tight loop where the
+        // CPU never slept between frames, just queued ImGui work until vsync.
+        // Fanless MacBook Air thermals notice. WaitEventsTimeout lets the
+        // process sleep up to `timeout` seconds and wakes on any input, so an
+        // idle editor settles to ~30 FPS instead of vsync's 60 while a
+        // mouse-move / keypress still feels immediate.
+        double timeout = 1.0 / 60.0;
         if (BackgroundThrottle() &&
             !glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
-            glfwWaitEventsTimeout(1.0 / 15.0);
-        } else {
-            glfwPollEvents();
+            timeout = 1.0 / 15.0;  // unfocused throttle
         }
+        glfwWaitEventsTimeout(timeout);
 
         // Drain pending directories — on a multi-drop, only the last one's listing is kept.
         if (!ctx.pending_directories.empty()) {
@@ -433,13 +438,11 @@ int main(int argc, char* argv[]) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        int drag_over_state = 0;
         ctx.close_indices.clear();
         bool clear_directory = false;
         RenderHexEditorUI(ctx.state, &ctx.docs, &ctx.active_doc,
                           ctx.load_error.c_str(),
                           &ctx.pending_paths,
-                          drag_over_state,
                           &ctx.close_indices,
                           &ctx.directory_files,
                           &ctx.directory_label,

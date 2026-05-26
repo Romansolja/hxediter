@@ -34,13 +34,15 @@ Same core hex editor: paged view for large files, inline byte edit,
 undo, search, goto, multi-tab, drag-drop, three palettes, HiDPI.
 
 **Chords accept either Cmd or Ctrl** on macOS, so muscle memory from
-either platform works:
+either platform works. The one exception is `Cmd+Tab` — macOS reserves
+it for the system app switcher, so the keystroke never reaches the app.
+Use `Ctrl+Tab` instead.
 
 | Chord | Action |
 |---|---|
 | `Cmd+Z`         | Undo last byte edit |
 | `Cmd+W`         | Close current tab |
-| `Cmd+Tab`       | Next tab (`Shift` to reverse; hold to cycle) |
+| `Ctrl+Tab`      | Next tab (`Shift` to reverse; hold to cycle) |
 | `Cmd+1` .. `Cmd+9` | Jump to tab N |
 | `Cmd+=`         | Zoom in |
 | `Cmd+-`         | Zoom out |

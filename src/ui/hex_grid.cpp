@@ -1,6 +1,7 @@
 #include "ui/hex_grid.h"
 #include "ui/actions.h"
 #include "ui/help_panel.h"
+#include "ui/hex_grid_math.h"
 #include "ui/layout.h"
 
 #include "imgui.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 
 namespace ui {
 
@@ -31,7 +33,7 @@ static float ComputeHexRowWidth(float offset_w, float char_w, float byte_w,
     return ascii_x + char_w * (bytes_per_line + 1);
 }
 
-HexLayout ComputeHexLayout(float avail_w, float scale) {
+HexLayout ComputeHexLayout(float avail_w, int64_t file_size, float scale) {
     HexLayout L;
     L.bytes_per_line = 16;
     // CalcTextSize returns unscaled metrics — multiply by scale to match SetWindowFontScale(scale).
@@ -55,6 +57,13 @@ HexLayout ComputeHexLayout(float avail_w, float scale) {
             }
         }
     }
+
+    // Files past INT_MAX rows at the width-chosen BPL would have bytes past
+    // the clipper's reach — bump BPL until every byte is addressable, even
+    // if that forces the row to overflow avail_w into horizontal scroll.
+    int min_bpl = MinBytesPerLineForAddressability(file_size);
+    if (min_bpl > best) best = min_bpl;
+
     L.bytes_per_line = best;
     L.byte_x.resize((size_t)L.bytes_per_line);
 
@@ -110,12 +119,11 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
     const int64_t bpl       = (int64_t)L.bytes_per_line;
     const bool    readonly  = core.IsReadOnly();
 
-    // Clipper takes int — clamp at INT_MAX (~32 GiB at 16 BPL, ~512 GiB at 256 BPL).
-    int64_t total_rows64 = (file_size + bpl - 1) / bpl;
-    if (total_rows64 < 0) total_rows64 = 0;
-    int total_rows = (total_rows64 > (int64_t)INT_MAX)
-                       ? INT_MAX
-                       : (int)total_rows64;
+    // ComputeHexLayout already bumped BPL when needed to keep the row count
+    // under INT_MAX; ComputeTotalRows applies the same clamp as a backstop and
+    // uses ceiling division without addition so file_size near INT64_MAX
+    // can't wrap negative.
+    const int total_rows = ComputeTotalRows(file_size, L.bytes_per_line);
 
     const float line_h = ImGui::GetTextLineHeightWithSpacing();
 
@@ -140,6 +148,11 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
 
     const ImU32 zebra_col = ImGui::GetColorU32(pal.zebra);
     const ImU32 hit_col   = ImGui::GetColorU32(pal.search_hit);
+
+    // Sized to L.bytes_per_line so huge-file rows (BPL bumped past 256 for
+    // addressability) still render their full ASCII column. Allocated once
+    // outside the row loop so the per-row cost is just a memset.
+    std::vector<char> ascii_buf((size_t)L.bytes_per_line + 1);
 
     ImGuiListClipper clipper;
     clipper.Begin(total_rows, line_h);
@@ -253,18 +266,16 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
             }
 
             ImGui::SameLine(L.ascii_x);
-            char ascii_buf[257];
-            int  ascii_len = 0;
-            const int ascii_cap = (int)sizeof(ascii_buf) - 1;
+            int ascii_len = 0;
             for (int c = 0; c < L.bytes_per_line; ++c) {
                 const int64_t idx_in_batch = in_batch + (int64_t)c;
                 if (idx_in_batch >= batch_size) break;
                 unsigned char b = batch[(size_t)idx_in_batch];
-                if (ascii_len < ascii_cap)
-                    ascii_buf[ascii_len++] = theme::IsAsciiPrintable(b) ? (char)b : '.';
+                ascii_buf[(size_t)ascii_len++] =
+                    theme::IsAsciiPrintable(b) ? (char)b : '.';
             }
-            ascii_buf[ascii_len] = '\0';
-            ImGui::TextUnformatted(ascii_buf);
+            ascii_buf[(size_t)ascii_len] = '\0';
+            ImGui::TextUnformatted(ascii_buf.data());
         }
     }
     clipper.End();

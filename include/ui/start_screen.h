@@ -8,11 +8,13 @@
 
 namespace ui {
 
-// drag_over_state: 0=none, 1=valid hover, 2=rejected.
+// Drag-hover overlay used to live here, but GLFW only fires on drop, not on
+// hover — restoring it would need macOS NSDraggingDestination wiring through
+// a custom NSView. Dropped until that arrives so the dead `drag_over_state`
+// parameter doesn't mislead readers into thinking the overlay still works.
 void RenderStartScreen(GuiState& s, const theme::Palette& pal,
                        const char* load_error,
                        std::vector<std::string>* out_pending_paths,
-                       int drag_over_state,
                        std::vector<std::string>* out_pending_directories);
 
 }
