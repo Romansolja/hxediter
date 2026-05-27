@@ -1,6 +1,7 @@
 #pragma once
 
 #include "editor.h"
+#include "file_handle.h"
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -59,7 +60,18 @@ public:
     bool ReloadFromDisk();
 
 private:
+    struct OpenedFile {
+        FileHandle fp;
+        int64_t    size;
+    };
+    // Opens "rb" with _IONBF, probes size. Throws on failure when
+    // `throw_on_failure` is true (constructor path); returns std::nullopt
+    // when false (ReloadFromDisk path). The filename in the error message
+    // comes from filename_storage_.
+    std::optional<OpenedFile> OpenAndProbe(bool throw_on_failure);
+
     EditorState state_;
+    FileHandle  fp_;                       // read handle — UI-thread-only
     std::string filename_storage_;
     int64_t     baseline_token_ = -1;
     bool        forced_readonly_ = false;  // ForceReadOnly latched on

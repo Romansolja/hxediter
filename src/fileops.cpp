@@ -1,6 +1,6 @@
 #include "fileops.h"
+#include "file_handle.h"
 
-#include <memory>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -81,19 +81,16 @@ int write_byte_at(FILE *fp, int64_t offset, unsigned char val)
 
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val)
 {
-    FILE *wf = open_file_shared(path, "rb+");
-    if (wf == NULL) return -1;
-    int rc = write_byte_at(wf, offset, val);
-    fclose(wf);
-    return rc;
+    FileHandle wf(open_file_shared(path, "rb+"));
+    if (!wf) return -1;
+    return write_byte_at(wf.get(), offset, val);
 }
 
 int replace_byte_at_path(const char *path, int64_t offset,
                          unsigned char new_val, unsigned char *out_old_val)
 {
     if (out_old_val == NULL) return -1;
-    std::unique_ptr<FILE, decltype(&std::fclose)>
-        wf(open_file_shared(path, "rb+"), &std::fclose);
+    FileHandle wf(open_file_shared(path, "rb+"));
     if (!wf) return -1;
 
     if (fseeko(wf.get(), offset, SEEK_SET) != 0) return -1;

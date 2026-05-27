@@ -7,6 +7,44 @@
 #include <stdexcept>
 #include <system_error>
 
+// Opens the read handle, switches it to _IONBF, and probes file size.
+// Centralizes the five-step ritual the constructor and ReloadFromDisk used
+// to duplicate. Throws std::runtime_error when `throw_on_failure` is true
+// (constructor path); returns std::nullopt when false (reload path).
+//
+// _IONBF: edits go through a separate write FILE*, and macOS keeps stdio's
+// read buffer valid across fseek into already-buffered ranges — ReadAt
+// would serve stale bytes after an edit. Refuse to open rather than fall
+// back to default buffering silently.
+std::optional<HexEditorCore::OpenedFile>
+HexEditorCore::OpenAndProbe(bool throw_on_failure)
+{
+    FileHandle fp(open_file_shared(state_.filename, "rb"));
+    if (!fp) {
+        if (throw_on_failure)
+            throw std::runtime_error("Cannot open '" + filename_storage_ + "'");
+        return std::nullopt;
+    }
+
+    if (setvbuf(fp.get(), nullptr, _IONBF, 0) != 0) {
+        if (throw_on_failure)
+            throw std::runtime_error(
+                "Cannot disable buffering on '" + filename_storage_ +
+                "' (setvbuf failed); refusing to open with default "
+                "buffering on macOS — would render stale bytes after edits.");
+        return std::nullopt;
+    }
+
+    int64_t size = get_file_size(fp.get());
+    if (size < 0) {
+        if (throw_on_failure)
+            throw std::runtime_error("Cannot determine file size");
+        return std::nullopt;
+    }
+
+    return OpenedFile{std::move(fp), size};
+}
+
 HexEditorCore::HexEditorCore(const std::string& filename)
     : state_{}, filename_storage_(filename)
 {
@@ -41,48 +79,21 @@ HexEditorCore::HexEditorCore(const std::string& filename)
     }
 
     // Probe writability, then keep only a read handle open — edits use transient write handles.
-    FILE* probe = open_file_shared(state_.filename, "rb+");
-    if (probe != nullptr) {
-        fclose(probe);
-        state_.is_readonly = 0;
-    } else {
-        state_.is_readonly = 1;
+    {
+        FileHandle probe(open_file_shared(state_.filename, "rb+"));
+        state_.is_readonly = probe ? 0 : 1;
     }
 
-    state_.fp = open_file_shared(state_.filename, "rb");
-    if (state_.fp == nullptr) {
-        throw std::runtime_error("Cannot open '" + filename + "'");
-    }
-
-    // _IONBF on read handle: edits go through a separate FILE*, and macOS keeps stdio's
-    // read buffer valid across fseek into already-buffered ranges — so ReadAt would
-    // serve stale bytes after an edit. Refuse to open rather than fall back silently.
-    if (setvbuf(state_.fp, nullptr, _IONBF, 0) != 0) {
-        fclose(state_.fp);
-        state_.fp = nullptr;
-        throw std::runtime_error(
-            "Cannot disable buffering on '" + filename + "' (setvbuf failed); "
-            "refusing to open with default buffering on macOS — would render "
-            "stale bytes after edits.");
-    }
-
-    // state_.fp is UI-thread-only: get_file_size, Search, and ReadAt all seek on it.
-    state_.file_size = get_file_size(state_.fp);
-    if (state_.file_size < 0) {
-        fclose(state_.fp);
-        state_.fp = nullptr;
-        throw std::runtime_error("Cannot determine file size");
-    }
+    // fp_ is UI-thread-only: get_file_size, Search, and ReadAt all seek on it.
+    auto opened     = OpenAndProbe(/*throw_on_failure=*/true);
+    fp_             = std::move(opened->fp);
+    state_.file_size = opened->size;
 
     // -1 means stat failed — degrade to no-detection rather than fail open.
     baseline_token_ = get_file_mtime_token(state_.filename);
 }
 
-HexEditorCore::~HexEditorCore()
-{
-    if (state_.fp != nullptr)
-        fclose(state_.fp);
-}
+HexEditorCore::~HexEditorCore() = default;
 
 std::vector<unsigned char> HexEditorCore::ReadAt(int64_t offset, size_t count) const
 {
@@ -93,10 +104,10 @@ std::vector<unsigned char> HexEditorCore::ReadAt(int64_t offset, size_t count) c
     if ((int64_t)count > avail) count = (size_t)avail;
 
     std::vector<unsigned char> buf(count);
-    if (fseeko(state_.fp, offset, SEEK_SET) != 0)
+    if (fseeko(fp_.get(), offset, SEEK_SET) != 0)
         return {};
 
-    size_t got = fread(buf.data(), 1, count, state_.fp);
+    size_t got = fread(buf.data(), 1, count, fp_.get());
     buf.resize(got);
     return buf;
 }
@@ -144,12 +155,12 @@ std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned cha
     if (pattern.empty())
         return std::nullopt;
 
-    int64_t result = search_bytes(state_.fp, state_.file_size,
+    int64_t result = search_bytes(fp_.get(), state_.file_size,
                                   start_offset, pattern.data(),
                                   static_cast<int>(pattern.size()));
 
     if (result == -1 && start_offset > 0) {
-        result = search_bytes(state_.fp, state_.file_size, 0,
+        result = search_bytes(fp_.get(), state_.file_size, 0,
                               pattern.data(), static_cast<int>(pattern.size()));
     }
 
@@ -200,33 +211,19 @@ void HexEditorCore::Rebaseline()
 
 bool HexEditorCore::ReloadFromDisk()
 {
-    if (state_.fp == nullptr) return false;
+    if (!fp_) return false;
 
     // An atomic replace (write-temp + rename) unlinks the original inode and
     // points filename_ at a new one. Our existing FILE* keeps the old inode
     // alive — reads would still serve stale bytes, while edits/undo (which
     // write by path) would land on the new inode. Close and reopen so reads
     // and writes share an inode again.
-    fclose(state_.fp);
-    state_.fp = open_file_shared(state_.filename, "rb");
-    if (state_.fp == nullptr) return false;
+    fp_.reset();
 
-    // _IONBF — same rationale as the constructor: with default buffering,
-    // ReadAt would serve cached bytes after an edit went through a separate
-    // write handle. Refuse to operate rather than silently desync.
-    if (setvbuf(state_.fp, nullptr, _IONBF, 0) != 0) {
-        fclose(state_.fp);
-        state_.fp = nullptr;
-        return false;
-    }
-
-    int64_t new_size = get_file_size(state_.fp);
-    if (new_size < 0) {
-        fclose(state_.fp);
-        state_.fp = nullptr;
-        return false;
-    }
-    state_.file_size = new_size;
+    auto opened = OpenAndProbe(/*throw_on_failure=*/false);
+    if (!opened) return false;
+    fp_              = std::move(opened->fp);
+    state_.file_size = opened->size;
 
     // Drop undo — old offsets may no longer refer to the same bytes.
     state_.undo_count = 0;
@@ -235,13 +232,8 @@ bool HexEditorCore::ReloadFromDisk()
     // Re-probe writability: the new inode can have different perms than the
     // original. ForceReadOnly is a one-way latch and stays on regardless.
     if (!forced_readonly_) {
-        FILE* probe = open_file_shared(state_.filename, "rb+");
-        if (probe != nullptr) {
-            fclose(probe);
-            state_.is_readonly = 0;
-        } else {
-            state_.is_readonly = 1;
-        }
+        FileHandle probe(open_file_shared(state_.filename, "rb+"));
+        state_.is_readonly = probe ? 0 : 1;
     }
 
     baseline_token_ = get_file_mtime_token(state_.filename);
