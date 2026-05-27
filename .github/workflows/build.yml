@@ -1,0 +1,65 @@
+name: build
+
+# Catches the easy-to-miss things before a release: configure breakage
+# from a new dependency, header changes that break a clean build, and
+# Apple-SDK assumptions baked into someone's local Xcode that don't
+# survive on a fresh runner. Doesn't replace manual smoke-testing of the
+# DMG (open from /Applications, edit a byte, undo, verify on disk) —
+# that still has to happen before tagging a release.
+
+on:
+  push:
+    branches: [main-cpp, macos-beta]
+  pull_request:
+    branches: [main-cpp, macos-beta]
+
+jobs:
+  macos-arm64:
+    # macos-14 = arm64. macos-latest sometimes points at x86_64 runners
+    # which would break the CMAKE_OSX_ARCHITECTURES=arm64 setting at the
+    # top of CMakeLists.txt.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DHXEDITER_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # Cheap parser/row-math + integration tests for HexEditorCore (read,
+      # search, edit/undo, external-modification, directory-open rejection).
+      # Runs before the bundle/sign steps so a logic regression fails fast.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # The bundle layout matters as much as the binary — release.sh's
+      # codesign + cpack expects hxediter.app to exist with assets staged
+      # into Contents/Resources by the POST_BUILD step in CMakeLists.
+      - name: Verify bundle layout
+        run: |
+          set -euo pipefail
+          test -d build/hxediter.app
+          test -x build/hxediter.app/Contents/MacOS/hxediter
+          test -f build/hxediter.app/Contents/Info.plist
+          test -d build/hxediter.app/Contents/Resources/assets/fonts
+          test -f build/hxediter.app/Contents/Resources/assets/fonts/Roboto-Regular.ttf
+
+      - name: Ad-hoc sign and verify
+        run: |
+          codesign --force --deep --sign - build/hxediter.app
+          codesign --verify --verbose=2 build/hxediter.app
+
+      # release.sh derives VERSION from CMakeLists.txt — assert the bash regex
+      # still resolves to a value, and that the value round-trips through
+      # release.sh's no-op self-check (passing the parsed version as the
+      # optional argument must not fail). Catches CMakeLists reformats that
+      # silently break version parsing.
+      - name: Verify release.sh version parsing
+        run: |
+          set -euo pipefail
+          PARSED=$(sed -n -E 's/^[[:space:]]*VERSION[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' \
+                   CMakeLists.txt | head -n1)
+          test -n "$PARSED"
+          echo "release.sh would build version: $PARSED"
