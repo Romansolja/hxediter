@@ -3,6 +3,7 @@
 #include "app_state.h"
 #include "path_utils.h"
 #include "platform/asset_path.h"
+#include "platform/macos_apple_events.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -165,6 +166,12 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Must precede glfwInit(): glfwInit() calls [NSApp finishLaunching], which is
+    // exactly when macOS dispatches kAEOpenDocuments events queued during launch
+    // (the cold-launch "Open With → hxediter" path). Registering after that point
+    // loses the very first event to NSApplication's default no-op handler.
+    platform::RegisterAppleEventHandlers();
+
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "Failed to initialize GLFW\n");
@@ -306,6 +313,10 @@ int main(int argc, char* argv[]) {
             timeout = 1.0 / 15.0;  // unfocused throttle
         }
         glfwWaitEventsTimeout(timeout);
+
+        // GLFW's macOS backend pumps NSApplication events inside glfwWaitEventsTimeout,
+        // so any kAEOpenDocuments handler invocations have already populated the queue.
+        platform::DrainPendingOpenPaths(ctx.pending_paths, ctx.pending_directories);
 
         // Drain pending directories — on a multi-drop, only the last one's listing is kept.
         if (!ctx.pending_directories.empty()) {

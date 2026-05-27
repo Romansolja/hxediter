@@ -101,7 +101,8 @@ set(HXEDITER_SOURCES
 if(APPLE)
     list(APPEND HXEDITER_SOURCES
         src/platform/file_dialogs_macos.mm
-        src/platform/macos_bundle.mm)
+        src/platform/macos_bundle.mm
+        src/platform/macos_apple_events.mm)
 else()
     message(FATAL_ERROR
         "Build target '${CMAKE_SYSTEM_NAME}' is not supported: the "

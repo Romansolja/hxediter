@@ -67,12 +67,17 @@ Drives build → ad-hoc sign → package → SHA256 in one shot. DMG lands
 in `build/`. The sign-before-package order is load-bearing — see
 comments in `release.sh` if you need to change it.
 
-## Quirks
+### Install locally from source
 
-- **"Open With → hxediter" from Finder doesn't open the file.** GLFW
-  doesn't surface the Apple Event for `kAEOpenDocuments`. Workarounds:
-  drag-drop onto a running app, use the Open dialog, or pass the path
-  as a CLI arg from Terminal.
+```
+./install.sh
+```
+
+Copies `build/hxediter.app` to `/Applications` and kicks Launch Services
+so Finder's "Open With" menu picks it up immediately. End users should
+still install from the DMG on the Releases page — this is the dev path.
+
+## Quirks
 
 - **Many UI issues.**
 
