@@ -68,6 +68,8 @@ struct AppContext {
     std::vector<OpenDocument> docs;
     int                       active_doc      = -1;
     int                       last_titled_doc = -2;   // sentinel forces first-frame title set
+    // Monotonic, never reused — stamps each OpenDocument with a stable tab id.
+    int                       next_doc_id     = 1;
     std::vector<std::string>  pending_paths;
     std::vector<int>          close_indices;
     std::vector<std::string>  pending_directories;
@@ -161,7 +163,11 @@ int main(int argc, char* argv[]) {
         if (ec) continue;
         if (std::filesystem::is_directory(status)) {
             ctx.pending_directories.push_back(a);
-        } else if (std::filesystem::is_regular_file(status)) {
+        } else {
+            // Non-directory: a regular file or a device node. Let HexEditorCore
+            // classify and guard it — this is what enables `sudo hxediter
+            // /dev/rdiskN` for device inspection. A pipe/socket (or a bad path)
+            // is rejected cleanly by the ctor, surfaced as a load error.
             ctx.pending_paths.push_back(a);
         }
     }
@@ -396,6 +402,8 @@ int main(int argc, char* argv[]) {
                     OpenDocument od;
                     od.core = std::make_unique<HexEditorCore>(path);
                     if (ReadonlyDefault()) od.core->ForceReadOnly();
+                    od.id            = ctx.next_doc_id++;
+                    od.canonical_key = key;
                     ctx.docs.push_back(std::move(od));
                     ctx.open_canonical.insert(key);
                     last_new_index = (int)ctx.docs.size() - 1;
@@ -478,11 +486,11 @@ int main(int argc, char* argv[]) {
                 ctx.close_indices.end());
             for (int idx : ctx.close_indices) {
                 if (idx < 0 || idx >= (int)ctx.docs.size()) continue;
-                // Read the filename before the unique_ptr is destroyed.
-                if (ctx.docs[idx].core) {
-                    ctx.open_canonical.erase(
-                        CanonicalKey(ctx.docs[idx].core->GetFilename()));
-                }
+                // Erase the dedup key captured at open time, not a fresh
+                // recompute: the path's symlink target may have changed since,
+                // and a divergent recompute would erase the wrong key and
+                // strand the original — permanently blocking reopen of the path.
+                ctx.open_canonical.erase(ctx.docs[idx].canonical_key);
                 ctx.docs.erase(ctx.docs.begin() + idx);
                 if (ctx.active_doc > idx) ctx.active_doc--;
             }

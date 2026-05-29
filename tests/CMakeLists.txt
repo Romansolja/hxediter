@@ -33,3 +33,9 @@ target_include_directories(test_hex_editor_core PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 add_test(NAME hex_editor_core COMMAND test_hex_editor_core)
+
+# Bound every test's wall-clock so a regression that reintroduces a blocking
+# open (e.g. a FIFO slipping past classification into fopen("rb")) fails the
+# run instead of hanging CI indefinitely.
+set_tests_properties(hex_parse hex_grid_math hex_editor_core
+                     PROPERTIES TIMEOUT 30)

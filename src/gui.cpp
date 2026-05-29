@@ -403,9 +403,12 @@ void RenderTabBar(ui::GuiState& s,
         const std::string filename = d.core ? d.core->GetFilename() : std::string();
         std::string base = TabLabelBase(filename);
 
-        // Disambiguate identical filenames from different directories.
+        // Bind the tab's ImGui id to the document's stable id, not the vector
+        // index — that disambiguates identical filenames AND keeps a manual
+        // drag-reorder from being discarded the moment an open/close shifts
+        // indices (which would move the label hash, i.e. the tab identity).
         char label[260];
-        std::snprintf(label, sizeof(label), "%s##tab%d", base.c_str(), i);
+        std::snprintf(label, sizeof(label), "%s##tab%d", base.c_str(), d.id);
 
         // No UnsavedDocument flag: edits write straight to disk — undo count is not "unsaved".
         ImGuiTabItemFlags item_flags = 0;
@@ -708,6 +711,19 @@ void RenderHexEditorUI(AppState state,
             // the warning (Cmd+Z path sets no pending_edit, so it'd leave baseline stale).
             doc.externally_modified = false;
             core_ref.Rebaseline();
+            // The external change may have resized the file. Refresh the cached
+            // size so the status readout and caret range stop reflecting the old
+            // length, and clamp positions now past EOF (mirrors the Reload
+            // branch). A pending edit beyond the new EOF then fails cleanly.
+            core_ref.RefreshFileSize();
+            const int64_t kept_size = core_ref.GetFileSize();
+            if (kept_size <= 0) {
+                doc.caret_byte = -1;
+                doc.last_hit   = -1;
+            } else {
+                if (doc.caret_byte >= kept_size) doc.caret_byte = kept_size - 1;
+                if (doc.last_hit   >= kept_size) doc.last_hit   = -1;
+            }
             if (doc.pending_edit_offset >= 0) {
                 auto res = core_ref.EditByte(doc.pending_edit_offset,
                                              doc.pending_edit_value);

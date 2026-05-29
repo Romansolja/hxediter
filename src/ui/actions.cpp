@@ -67,9 +67,17 @@ void DoUndo(GuiState& s, DocumentState& doc, HexEditorCore& core) {
         doc.conflict_modal_open = true;
         return;
     }
+    // Undo() returns nullopt both for an empty stack and for a write that
+    // failed (it calls undo_unpop and keeps the entry). Check the count first
+    // so a failed write isn't misreported to the user as "Nothing to undo".
+    if (core.GetUndoCount() == 0) {
+        s.SetStatus("Nothing to undo", GuiState::STATUS_WARN);
+        return;
+    }
     auto res = core.Undo();
     if (!res) {
-        s.SetStatus("Nothing to undo", GuiState::STATUS_WARN);
+        s.SetStatus("Undo failed — could not write to file",
+                    GuiState::STATUS_ERROR);
         return;
     }
     s.MarkInteracted();

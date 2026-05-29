@@ -1,5 +1,6 @@
 #include "test_runner.h"
 #include "hex_editor_core.h"
+#include "fileops.h"
 
 #include <chrono>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 
@@ -275,6 +277,100 @@ static void test_missing_file_rejected() {
     HX_TEST_ASSERT(threw);
 }
 
+static void test_undo_does_not_extend_truncated_file() {
+    // Regression: edit a byte, let an external process shrink the file below
+    // that offset, then undo. The undo write path must REFUSE the past-EOF
+    // offset rather than fseeko-past-EOF + fputc, which would silently regrow
+    // the file with a zero-filled sparse hole (data corruption).
+    auto path = make_temp_file(std::vector<unsigned char>(64, 0x55));
+    HX_TEST_ASSERT(!path.empty());
+    {
+        HexEditorCore core(path);
+        HX_TEST_ASSERT_EQ(core.GetFileSize(), (int64_t)64);
+
+        // Edit near the end, creating an undo entry at offset 48.
+        auto e = core.EditByte(48, 0xAA);
+        HX_TEST_ASSERT(e.has_value());
+        HX_TEST_ASSERT_EQ(core.GetUndoCount(), 1);
+
+        // External shrink to 16 bytes — below the edited offset.
+        HX_TEST_ASSERT_EQ(truncate(path.c_str(), 16), 0);
+        HX_TEST_ASSERT_EQ((int64_t)fs::file_size(path), (int64_t)16);
+
+        // Undo must fail without touching the file size.
+        HX_TEST_ASSERT(!core.Undo().has_value());
+        HX_TEST_ASSERT_EQ((int64_t)fs::file_size(path), (int64_t)16);
+        // undo_unpop restored the entry, so it can be retried after a reload.
+        HX_TEST_ASSERT_EQ(core.GetUndoCount(), 1);
+    }
+    fs::remove(path);
+}
+
+static void test_fifo_rejected() {
+    // A FIFO must be rejected at construction. Classification runs through
+    // std::filesystem::status (stat-based) BEFORE any fopen, so the editor never
+    // reaches the fopen("rb") that would block forever waiting for a writer.
+    auto fifo = fs::temp_directory_path() /
+                ("hxediter_test_fifo_" + std::to_string(getpid()) + "_" +
+                 std::to_string(std::rand()));
+    if (mkfifo(fifo.string().c_str(), 0600) != 0) return;  // skip if unsupported
+    bool threw = false;
+    try {
+        HexEditorCore core(fifo.string());
+    } catch (const std::runtime_error&) {
+        threw = true;
+    } catch (...) {
+    }
+    fs::remove(fifo);
+    HX_TEST_ASSERT(threw);
+}
+
+static void test_device_without_size_rejected() {
+    // /dev/null is a character device, so it is classified as a device — but the
+    // DKIOC block-count query fails on it, so the guarded device path rejects it:
+    // there is no seekable extent to inspect.
+    const char* dev = "/dev/null";
+    if (!fs::exists(dev)) return;  // skip where unavailable
+    bool threw = false;
+    try {
+        HexEditorCore core(dev);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    } catch (...) {
+    }
+    HX_TEST_ASSERT(threw);
+}
+
+static void test_align_device_read() {
+    // Pure block-alignment math for raw-device reads (block size 512 within a
+    // 4096-byte device). This is the part of device inspection that real
+    // hardware/root access would otherwise be needed to exercise.
+    auto w = align_device_read(0, 512, 4096, 512);      // aligned, one whole block
+    HX_TEST_ASSERT_EQ(w.start,  (int64_t)0);
+    HX_TEST_ASSERT_EQ(w.length, (int64_t)512);
+    HX_TEST_ASSERT_EQ(w.slice,  (int64_t)0);
+
+    w = align_device_read(100, 16, 4096, 512);          // unaligned within block 0
+    HX_TEST_ASSERT_EQ(w.start,  (int64_t)0);
+    HX_TEST_ASSERT_EQ(w.length, (int64_t)512);
+    HX_TEST_ASSERT_EQ(w.slice,  (int64_t)100);
+
+    w = align_device_read(500, 24, 4096, 512);          // straddles a block boundary
+    HX_TEST_ASSERT_EQ(w.start,  (int64_t)0);
+    HX_TEST_ASSERT_EQ(w.length, (int64_t)1024);
+    HX_TEST_ASSERT_EQ(w.slice,  (int64_t)500);
+
+    w = align_device_read(4090, 16, 4096, 512);         // clamps at the device end
+    HX_TEST_ASSERT_EQ(w.start,  (int64_t)3584);
+    HX_TEST_ASSERT_EQ(w.length, (int64_t)512);
+    HX_TEST_ASSERT_EQ(w.slice,  (int64_t)506);
+
+    // Degenerate inputs yield an empty window.
+    HX_TEST_ASSERT_EQ(align_device_read(-1, 16, 4096, 512).length,   (int64_t)0);
+    HX_TEST_ASSERT_EQ(align_device_read(0, 16, 4096, 0).length,      (int64_t)0);
+    HX_TEST_ASSERT_EQ(align_device_read(4096, 16, 4096, 512).length, (int64_t)0);
+}
+
 int main() {
     std::srand((unsigned)std::time(nullptr));
     test_read_at();
@@ -285,5 +381,9 @@ int main() {
     test_force_readonly_survives_reload();
     test_directory_open_rejected();
     test_missing_file_rejected();
+    test_undo_does_not_extend_truncated_file();
+    test_fifo_rejected();
+    test_device_without_size_rejected();
+    test_align_device_read();
     return tests::run_all();
 }

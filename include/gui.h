@@ -13,6 +13,14 @@ struct ImFont;
 struct OpenDocument {
     std::unique_ptr<HexEditorCore> core;
     ui::DocumentState              doc_state;
+    // Stable identity for the tab's lifetime. The tab-bar label binds ImGui's
+    // tab id to this rather than to the docs-vector index, so a manual
+    // drag-reorder survives any open/close that shifts indices.
+    int                            id = 0;
+    // Canonical dedup key captured at open time. Erased verbatim on close —
+    // recomputing it from the filename then would diverge if the path's symlink
+    // target changed since open, stranding a stale key that blocks reopening.
+    std::string                    canonical_key;
 };
 
 // Any font may be null — UI falls back. icon_font_small is a narrow-range FA at toolbar size.

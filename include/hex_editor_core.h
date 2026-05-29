@@ -56,6 +56,11 @@ public:
     // Resync baseline_token_ with disk without touching bytes or undo.
     void Rebaseline();
 
+    // Re-probe the on-disk size from the open read handle, leaving bytes and
+    // undo untouched. For the "Keep my edits" path, which accepts an external
+    // resize without reopening.
+    void RefreshFileSize();
+
     // Rebaseline + drop pending undo. False if the file handle is bad.
     bool ReloadFromDisk();
 
@@ -63,6 +68,7 @@ private:
     struct OpenedFile {
         FileHandle fp;
         int64_t    size;
+        int64_t    block_size = 0;   // >0 for a device (read alignment); 0 for a regular file
     };
     // Opens "rb" with _IONBF, probes size. Throws on failure when
     // `throw_on_failure` is true (constructor path); returns std::nullopt
@@ -75,4 +81,6 @@ private:
     std::string filename_storage_;
     int64_t     baseline_token_ = -1;
     bool        forced_readonly_ = false;  // ForceReadOnly latched on
+    bool        is_device_ = false;        // block/character device opened for inspection
+    int64_t     device_block_size_ = 0;    // read alignment when is_device_; 0 for regular files
 };

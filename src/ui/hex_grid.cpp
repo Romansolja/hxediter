@@ -129,6 +129,12 @@ void RenderHexGrid(GuiState& s, DocumentState& doc,
 
     // Scroll before the clipper measures. Only act if the target row isn't already in view —
     // otherwise arrow keys would jerk-recenter on every keystroke.
+    //
+    // ImGui scrolls in float pixels, so target_y loses integer precision once
+    // target_row exceeds 2^24 (~268 MB at 16 bytes/row): Goto/Search/arrow jumps
+    // then land within a few rows of the target rather than exactly on it. The
+    // bytes stay reachable (the clipper is int-indexed) — only the auto-scroll
+    // is approximate. Exact placement would need a custom virtual scrollbar.
     if (doc.pending_scroll_offset >= 0 && bpl > 0) {
         const int64_t target_row    = doc.pending_scroll_offset / bpl;
         const float   target_y      = (float)target_row * line_h;
