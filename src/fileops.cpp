@@ -28,6 +28,29 @@ int64_t get_file_size(FILE *fp)
     return size;
 }
 
+int64_t find_in_buffer(const unsigned char *buf, size_t len,
+                       const unsigned char *pattern, int pattern_len)
+{
+    if (pattern_len <= 0 || len < (size_t)pattern_len)
+        return -1;
+
+    const unsigned char *search_ptr = buf;
+    size_t remaining = len;
+    while (remaining >= (size_t)pattern_len) {
+        const unsigned char *match = (const unsigned char *)memchr(
+            search_ptr, pattern[0], remaining - pattern_len + 1);
+        if (!match)
+            break;
+
+        if (memcmp(match, pattern, pattern_len) == 0)
+            return (int64_t)(match - buf);
+
+        search_ptr = match + 1;
+        remaining = len - (size_t)(search_ptr - buf);
+    }
+    return -1;
+}
+
 int64_t search_bytes(FILE *fp, int64_t file_size,
                      int64_t start, const unsigned char *pattern, int pattern_len)
 {
@@ -41,31 +64,16 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
 
     pos = start;
     while (pos + pattern_len <= file_size) {
-        size_t got;
-        unsigned char *search_ptr;
-        int remaining;
-
         if (fseeko(fp, pos, SEEK_SET) != 0)
             return -1;
 
-        got = fread(chunk, 1, SEARCH_CHUNK, fp);
+        size_t got = fread(chunk, 1, SEARCH_CHUNK, fp);
         if (got < (size_t)pattern_len)
             break;
 
-        search_ptr = chunk;
-        remaining = (int)got;
-        while (remaining >= pattern_len) {
-            unsigned char *match = (unsigned char *)memchr(search_ptr, pattern[0],
-                                          remaining - pattern_len + 1);
-            if (!match)
-                break;
-
-            if (memcmp(match, pattern, pattern_len) == 0)
-                return pos + (int64_t)(match - chunk);
-
-            search_ptr = match + 1;
-            remaining = (int)got - (int)(search_ptr - chunk);
-        }
+        int64_t idx = find_in_buffer(chunk, got, pattern, pattern_len);
+        if (idx >= 0)
+            return pos + idx;
 
         // Overlap by pattern_len-1 so a pattern straddling chunks hits.
         pos += (int64_t)got - (pattern_len - 1);

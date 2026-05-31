@@ -93,9 +93,12 @@ static std::string CanonicalKey(const std::string& utf8_path) {
 
 static int FindDocByCanonical(const std::vector<OpenDocument>& docs,
                               const std::string& canonical_key) {
+    // Compare the key captured at open time, not a fresh recompute: a mid-session
+    // symlink/rename would make weakly_canonical diverge from both open_canonical
+    // and this lookup, so a known-open file could end up neither focused nor
+    // reopened (count(key)>0 yet this returns -1 -> the open silently no-ops).
     for (int i = 0; i < (int)docs.size(); ++i) {
-        if (!docs[i].core) continue;
-        if (CanonicalKey(docs[i].core->GetFilename()) == canonical_key) return i;
+        if (docs[i].canonical_key == canonical_key) return i;
     }
     return -1;
 }

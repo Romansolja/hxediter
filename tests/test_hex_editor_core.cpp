@@ -371,6 +371,32 @@ static void test_align_device_read() {
     HX_TEST_ASSERT_EQ(align_device_read(4096, 16, 4096, 512).length, (int64_t)0);
 }
 
+static void test_find_in_buffer() {
+    // Shared scan helper behind both search_bytes (regular files) and the
+    // device search loop. Exercises start/middle/end hits, absence, a
+    // false-first-byte case, and degenerate lengths.
+    const unsigned char buf[] = {0x00, 0x11, 0x22, 0x33, 0x22, 0x33, 0x44};
+    const size_t n = sizeof(buf);
+
+    unsigned char p_mid[] = {0x22, 0x33};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, n, p_mid, 2), (int64_t)2);   // first occurrence
+    unsigned char p_end[] = {0x44};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, n, p_end, 1), (int64_t)6);   // last byte
+    unsigned char p_begin[] = {0x00};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, n, p_begin, 1), (int64_t)0); // first byte
+    unsigned char p_miss[] = {0xDE, 0xAD};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, n, p_miss, 2), (int64_t)-1); // absent
+
+    // First byte matches repeatedly but the full pattern only matches later.
+    const unsigned char buf2[] = {0x22, 0x00, 0x22, 0x33};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf2, sizeof(buf2), p_mid, 2), (int64_t)2);
+
+    // Degenerate: pattern longer than the buffer, and zero length.
+    unsigned char p_long[] = {0x00, 0x11, 0x22};
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, 2, p_long, 3), (int64_t)-1);
+    HX_TEST_ASSERT_EQ(find_in_buffer(buf, n, p_mid, 0), (int64_t)-1);
+}
+
 int main() {
     std::srand((unsigned)std::time(nullptr));
     test_read_at();
@@ -385,5 +411,6 @@ int main() {
     test_fifo_rejected();
     test_device_without_size_rejected();
     test_align_device_read();
+    test_find_in_buffer();
     return tests::run_all();
 }

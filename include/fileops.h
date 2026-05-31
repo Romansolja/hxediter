@@ -10,6 +10,11 @@ int64_t search_bytes(FILE *fp, int64_t file_size,
                      int64_t start, const unsigned char *pattern, int pattern_len);
 int write_byte_at(FILE *fp, int64_t offset, unsigned char val);
 
+// First index of `pattern` within `buf` (len bytes), or -1. Pure — shared by
+// the regular-file (search_bytes) and device (aligned-read) search loops.
+int64_t find_in_buffer(const unsigned char *buf, size_t len,
+                       const unsigned char *pattern, int pattern_len);
+
 // Open, patch, close — hxediter never holds write access when idle. 0 on success, -1 otherwise.
 int write_byte_at_path(const char *path, int64_t offset, unsigned char val);
 

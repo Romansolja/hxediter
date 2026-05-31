@@ -76,6 +76,13 @@ private:
     // comes from filename_storage_.
     std::optional<OpenedFile> OpenAndProbe(bool throw_on_failure);
 
+    // First match of `pattern` at/after `start`, or -1. Dispatches to the raw
+    // fread scan (regular files) or the block-aligned ReadAt scan (devices).
+    int64_t SearchFrom(const std::vector<unsigned char>& pattern, int64_t start) const;
+    // Device search reads via ReadAt (block-aligned) — a raw /dev/rdiskN rejects
+    // the unaligned reads search_bytes would otherwise issue.
+    int64_t SearchDevice(const std::vector<unsigned char>& pattern, int64_t start) const;
+
     EditorState state_;
     FileHandle  fp_;                       // read handle — UI-thread-only
     std::string filename_storage_;

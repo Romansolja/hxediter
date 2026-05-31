@@ -223,19 +223,53 @@ std::optional<SearchResult> HexEditorCore::Search(const std::vector<unsigned cha
     if (pattern.empty())
         return std::nullopt;
 
-    int64_t result = search_bytes(fp_.get(), state_.file_size,
-                                  start_offset, pattern.data(),
-                                  static_cast<int>(pattern.size()));
+    int64_t result = SearchFrom(pattern, start_offset);
 
-    if (result == -1 && start_offset > 0) {
-        result = search_bytes(fp_.get(), state_.file_size, 0,
-                              pattern.data(), static_cast<int>(pattern.size()));
-    }
+    // Wrap to the beginning if there's no forward match.
+    if (result == -1 && start_offset > 0)
+        result = SearchFrom(pattern, 0);
 
     if (result == -1)
         return std::nullopt;
 
     return SearchResult{result};
+}
+
+int64_t HexEditorCore::SearchFrom(const std::vector<unsigned char>& pattern,
+                                  int64_t start) const
+{
+    if (device_block_size_ > 0)
+        return SearchDevice(pattern, start);
+    return search_bytes(fp_.get(), state_.file_size, start,
+                        pattern.data(), static_cast<int>(pattern.size()));
+}
+
+int64_t HexEditorCore::SearchDevice(const std::vector<unsigned char>& pattern,
+                                    int64_t start) const
+{
+    const int plen = static_cast<int>(pattern.size());
+    if (plen <= 0 || start < 0 || start > state_.file_size ||
+        (int64_t)plen > state_.file_size - start)
+        return -1;
+
+    // 1 MiB windows pulled through ReadAt, which block-aligns each read so a raw
+    // /dev/rdiskN accepts it. Overlap by plen-1 so a match straddling two
+    // windows is still found — same invariant as search_bytes.
+    const int64_t kWindow = 1 << 20;
+    int64_t pos = start;
+    while (pos + plen <= state_.file_size) {
+        int64_t want = state_.file_size - pos;
+        if (want > kWindow) want = kWindow;
+        std::vector<unsigned char> buf = ReadAt(pos, (size_t)want);
+        if ((int64_t)buf.size() < plen)
+            break;
+        int64_t idx = find_in_buffer(buf.data(), buf.size(),
+                                     pattern.data(), plen);
+        if (idx >= 0)
+            return pos + idx;
+        pos += (int64_t)buf.size() - (plen - 1);
+    }
+    return -1;
 }
 
 int64_t HexEditorCore::GetFileSize() const
